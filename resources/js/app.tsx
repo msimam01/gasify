@@ -1,4 +1,5 @@
 import '../css/app.css';
+import { Ziggy } from './ziggy';
 
 import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
@@ -16,6 +17,11 @@ createInertiaApp({
         ),
     setup({ el, App, props }) {
         const root = createRoot(el);
+
+        // Make Ziggy available globally
+        if (typeof window !== 'undefined') {
+            window.Ziggy = Ziggy;
+        }
 
         root.render(<App {...props} />);
     },

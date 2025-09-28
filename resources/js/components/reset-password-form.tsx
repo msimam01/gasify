@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Link } from "@inertiajs/react"
-import { route } from 'ziggy-js'
+import { route } from "ziggy-js"
 
 interface ResetPasswordFormProps {
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void

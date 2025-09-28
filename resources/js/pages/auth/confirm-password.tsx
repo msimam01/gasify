@@ -1,52 +1,38 @@
-import InputError from '@/components/input-error';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import AuthLayout from '@/layouts/auth-layout';
-import { store } from '@/routes/password/confirm';
-import { Form, Head } from '@inertiajs/react';
-import { LoaderCircle } from 'lucide-react';
+import { Head, router, useForm } from '@inertiajs/react';
+import { ConfirmPasswordForm } from '@/components/confirm-password-form';
+import { FormEvent } from 'react';
 
 export default function ConfirmPassword() {
+    const { data, setData, post, processing, errors } = useForm({
+        password: '',
+    });
+
+    const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        router.post('/password/confirm', data, {
+            onSuccess: () => {
+                // The page will be reloaded automatically by Inertia
+            },
+        });
+    };
+
+    const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setData('password', e.target.value);
+    };
+
     return (
-        <AuthLayout
-            title="Confirm your password"
-            description="This is a secure area of the application. Please confirm your password before continuing."
-        >
-            <Head title="Confirm password" />
-
-            <Form {...store.form()} resetOnSuccess={['password']}>
-                {({ processing, errors }) => (
-                    <div className="space-y-6">
-                        <div className="grid gap-2">
-                            <Label htmlFor="password">Password</Label>
-                            <Input
-                                id="password"
-                                type="password"
-                                name="password"
-                                placeholder="Password"
-                                autoComplete="current-password"
-                                autoFocus
-                            />
-
-                            <InputError message={errors.password} />
-                        </div>
-
-                        <div className="flex items-center">
-                            <Button
-                                className="w-full"
-                                disabled={processing}
-                                data-test="confirm-password-button"
-                            >
-                                {processing && (
-                                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                                )}
-                                Confirm password
-                            </Button>
-                        </div>
-                    </div>
-                )}
-            </Form>
-        </AuthLayout>
+        <div className="bg-muted flex min-h-svh flex-col items-center justify-center p-6 md:p-10">
+            <Head title="Confirm Password" />
+            
+            <div className="w-full max-w-sm md:max-w-3xl">
+                <ConfirmPasswordForm 
+                    onSubmit={handleSubmit}
+                    errors={errors}
+                    processing={processing}
+                    onPasswordChange={handlePasswordChange}
+                    value={data.password}
+                />
+            </div>
+        </div>
     );
 }

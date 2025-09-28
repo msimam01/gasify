@@ -1,50 +1,28 @@
-// Components
-import EmailVerificationNotificationController from '@/actions/App/Http/Controllers/Auth/EmailVerificationNotificationController';
-import { logout } from '@/routes';
-import { Form, Head } from '@inertiajs/react';
-import { LoaderCircle } from 'lucide-react';
-
-import TextLink from '@/components/text-link';
-import { Button } from '@/components/ui/button';
-import AuthLayout from '@/layouts/auth-layout';
+import { Head, router } from '@inertiajs/react';
+import { VerifyEmailForm } from '@/components/verify-email-form';
+import { FormEvent } from 'react';
 
 export default function VerifyEmail({ status }: { status?: string }) {
+    const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        router.post('/email/verification-notification');
+    };
+
+    const handleLogout = () => {
+        router.post('/logout');
+    };
+
     return (
-        <AuthLayout
-            title="Verify email"
-            description="Please verify your email address by clicking on the link we just emailed to you."
-        >
-            <Head title="Email verification" />
-
-            {status === 'verification-link-sent' && (
-                <div className="mb-4 text-center text-sm font-medium text-green-600">
-                    A new verification link has been sent to the email address
-                    you provided during registration.
-                </div>
-            )}
-
-            <Form
-                {...EmailVerificationNotificationController.store.form()}
-                className="space-y-6 text-center"
-            >
-                {({ processing }) => (
-                    <>
-                        <Button disabled={processing} variant="secondary">
-                            {processing && (
-                                <LoaderCircle className="h-4 w-4 animate-spin" />
-                            )}
-                            Resend verification email
-                        </Button>
-
-                        <TextLink
-                            href={logout()}
-                            className="mx-auto block text-sm"
-                        >
-                            Log out
-                        </TextLink>
-                    </>
-                )}
-            </Form>
-        </AuthLayout>
+        <div className="bg-muted flex min-h-svh flex-col items-center justify-center p-6 md:p-10">
+            <Head title="Email Verification" />
+            
+            <div className="w-full max-w-sm md:max-w-3xl">
+                <VerifyEmailForm 
+                    onSubmit={handleSubmit}
+                    status={status}
+                    onLogout={handleLogout}
+                />
+            </div>
+        </div>
     );
 }

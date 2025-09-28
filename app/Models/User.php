@@ -46,4 +46,28 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
+
+    /**
+     * Get the user's wallet balances.
+     */
+    public function walletBalances()
+    {
+        return $this->hasMany(WalletBalances::class);
+    }
+
+    /**
+     * Get the user's transactions.
+     */
+    public function transactions()
+    {
+        return $this->hasMany(Transactions::class);
+    }
+
+    /**
+     * Get the user's wallets.
+     */
+    public function userWallets()
+    {
+        return $this->hasMany(UserWallets::class);
+    }
 }

@@ -6,5 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 
 class Chains extends Model
 {
-    //
+    protected $fillable = [
+        'slug',
+        'name',
+        'symbol',
+        'decimals',
+        'logo',
+        'metadata'
+    ];
+
 }

@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    'ethereum' => [
+        'rpc' => env('ETHEREUM_RPC', 'https://sepolia.infura.io/v3/f66861aec5ab4492a04d43dbf7a4d55b
+'),
+    ],
+    'sidra' => [
+        'rpc' => env('SIDRA_RPC', 'https://sidrachain-public-rpc'),
+    ],
+    'solana' => [
+        'rpc' => env('SOLANA_RPC', 'https://api.devnet.solana.com'),
+    ],
+
+
 ];

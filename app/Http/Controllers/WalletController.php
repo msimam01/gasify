@@ -2,8 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\WalletBalances;
 use App\Models\Transactions;
+use App\Models\UserWallets;
+use App\Models\WalletBalances;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
@@ -12,7 +13,7 @@ class WalletController extends Controller
     public function index()
     {
         $user = auth()->user();
-        
+
         // Get user's wallet balances
         $balances = WalletBalances::where('user_id', $user->id)
             ->get()
@@ -23,6 +24,25 @@ class WalletController extends Controller
                     'reserved' => $balance->reserved_minor / 100,
                     'available' => ($balance->balance_minor - $balance->reserved_minor) / 100,
                     'token_balance' => $balance->token_balance,
+                ];
+            });
+        // Blockchain wallets
+        $wallets = UserWallets::with('chain')
+            ->where('user_id', $user->id)
+            ->get()
+            ->map(function ($wallet) {
+                return [
+                    'id' => $wallet->id,
+                    'chain' => $wallet->chain->name,
+                    'symbol' => $wallet->chain->symbol,
+                    'address' => $wallet->address,
+                    'is_primary' => $wallet->is_primary,
+                    'logo' => $wallet->chain->logo,
+                    'balance' => optional(
+                        \App\Models\WalletBalances::where('user_id', $wallet->user_id)
+                            ->where('currency', $wallet->chain->symbol)
+                            ->first()
+                    )->token_balance ?? 0,
                 ];
             });
 
@@ -45,6 +65,7 @@ class WalletController extends Controller
 
         return Inertia::render('Wallet/Index', [
             'balances' => $balances,
+            'wallets' => $wallets,
             'recentTransactions' => $recentTransactions,
         ]);
     }
@@ -64,7 +85,7 @@ class WalletController extends Controller
 
         // Here you would integrate with your payment processor
         // For now, we'll just simulate a successful payment
-        
+
         $user = auth()->user();
         $amountMinor = $request->amount * 100; // Convert to minor units
 

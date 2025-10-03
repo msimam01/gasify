@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Http\Controllers\Auth;
+use App\Services\WalletService;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -15,6 +16,12 @@ use Inertia\Response;
 
 class RegisteredUserController extends Controller
 {
+    protected $walletService;
+
+    public function __construct(WalletService $walletService){
+        $this->walletService = $walletService;
+    }
+
     /**
      * Show the registration page.
      */
@@ -42,6 +49,9 @@ class RegisteredUserController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
+        // 🔑 initialize wallets
+        $this->walletService->initializeUserWallets($user);
+        
         event(new Registered($user));
 
         Auth::login($user);

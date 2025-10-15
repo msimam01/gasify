@@ -16,7 +16,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // Wallet routes
     Route::get('wallet', [WalletController::class, 'index'])->name('wallet');
     Route::get('topup', [WalletController::class, 'topup'])->name('topup');
+    Route::get('withdraw', [WalletController::class, 'withdraw'])->name('withdraw');
     Route::post('wallet/topup/process', [WalletController::class, 'processTopup'])->name('wallet.topup.process');
+    Route::post('wallet/withdraw/process', [WalletController::class, 'processWithdrawal'])->name('wallet.withdraw.process');
 });
 
 require __DIR__.'/settings.php';

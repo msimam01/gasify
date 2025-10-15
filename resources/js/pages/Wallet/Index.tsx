@@ -138,12 +138,20 @@ export default function WalletIndex({ balances, wallets, recentTransactions }: P
                 <h1 className="text-2xl font-bold">My Wallet</h1>
                 <p className="text-muted-foreground">Manage your balances and transactions</p>
               </div>
-              <Button asChild className="w-full sm:w-auto">
-                <a href="/topup">
-                  <IconPlus className="mr-2 h-4 w-4" />
-                  Top Up Wallet
-                </a>
-              </Button>
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                <Button asChild variant="outline" className="w-full sm:w-auto">
+                  <a href="/withdraw">
+                    <IconArrowUpRight className="mr-2 h-4 w-4" />
+                    Withdraw
+                  </a>
+                </Button>
+                <Button asChild className="w-full sm:w-auto">
+                  <a href="/topup">
+                    <IconPlus className="mr-2 h-4 w-4" />
+                    Top Up
+                  </a>
+                </Button>
+              </div>
             </div>
 
             {/* Balance Cards */}

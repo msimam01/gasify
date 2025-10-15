@@ -9,13 +9,20 @@ import {
 import { type BreadcrumbItem as BreadcrumbItemType } from '@/types';
 import { Link } from '@inertiajs/react';
 import { Fragment } from 'react';
-
+import { route } from 'ziggy-js';
 
 export function Breadcrumbs({
-    breadcrumbs,
+    breadcrumbs = [],
 }: {
     breadcrumbs: BreadcrumbItemType[];
 }) {
+    // Helper function to get the href, handling both route names and full URLs
+    const getHref = (item: BreadcrumbItemType) => {
+        if (item.href.startsWith('http') || item.href.startsWith('/')) {
+            return item.href;
+        }
+        return route(item.href);
+    };
     return (
         <>
             {breadcrumbs.length > 0 && (
@@ -32,7 +39,7 @@ export function Breadcrumbs({
                                             </BreadcrumbPage>
                                         ) : (
                                             <BreadcrumbLink asChild>
-                                                <Link href={item.href}>
+                                                <Link href={getHref(item)}>
                                                     {item.title}
                                                 </Link>
                                             </BreadcrumbLink>

@@ -7,14 +7,18 @@ use App\Models\UserWallets;
 use App\Models\WalletBalances;
 use App\Models\PricingRules;
 use App\Jobs\ProcessBlockchainWithdrawal;
+use App\Services\SolanaService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
 use Inertia\Inertia;
 
 class WalletController extends Controller
 {
     public function index()
     {
-        $user = auth()->user();
+        $user = Auth::user();
 
         // Get user's wallet balances
         $balances = WalletBalances::where('user_id', $user->id)
@@ -74,7 +78,7 @@ class WalletController extends Controller
 
     public function topup()
     {
-        $user = auth()->user();
+        $user = Auth::user();
 
         // Fetch user's blockchain wallets to display for crypto deposits
         $wallets = UserWallets::with('chain')
@@ -103,7 +107,7 @@ public function processTopup(Request $request)
         'payment_method' => 'required|in:opay,paystack,flutterwave',
     ]);
 
-    $user = auth()->user();
+    $user = Auth::user();
     $amountMinor = $request->amount * 100;
 
     // 1. Calculate fees (using fiat "chain" rules)
@@ -171,7 +175,7 @@ public function processTopup(Request $request)
         'destination' => 'required|string', // e.g. bank acct or wallet address
     ]);
 
-    $user = auth()->user();
+    $user = Auth::user();
     $amountMinor = $request->amount * 100;
 
     $balance = WalletBalances::where('user_id', $user->id)
@@ -226,7 +230,7 @@ public function processTopup(Request $request)
     if ($request->wantsJson()) {
         return response()->json([
             'message' => 'Withdrawal request submitted successfully',
-            'transaction_id' => $transaction->id,
+            'transaction_id' => 'pending',
         ]);
     }
 
@@ -238,7 +242,7 @@ public function processTopup(Request $request)
  */
 public function withdraw()
 {
-    $user = auth()->user();
+    $user = Auth::user();
 
     // Get user's wallet balances
     $balances = WalletBalances::where('user_id', $user->id)
@@ -261,22 +265,46 @@ public function withdraw()
 /**
  * Process withdrawal request from web form
  */
-public function processWithdrawal(Request $request)
+    public function processWithdrawal(Request $request)
 {
+        Log::info('processWithdrawal invoked', [
+            'user_id' => optional($request->user())->id,
+            'payload' => $request->only(['amount','currency','wallet_address','network'])
+        ]);
     $validated = $request->validate([
         'amount' => 'required|numeric|gt:0',
-        'currency' => 'required|in:NGN,USD,USDT,USDC,BTC,ETH',
-        'wallet_address' => 'required_if:currency,ETH,USDT,USDC|string|max:255',
-        'network' => 'required_if:currency,ETH,USDT,USDC|in:ethereum,binance,arbitrum,optimism',
+            'currency' => 'required|in:NGN,USD,USDT,USDC,BTC,ETH,SOL',
+            'wallet_address' => 'required_if:currency,ETH,USDT,USDC,SOL|string|max:255',
+            'network' => 'nullable|in:ethereum,binance,arbitrum,optimism,solana',
         'memo' => 'nullable|string|max:255',
     ]);
 
-    // Additional validation for ETH address
+        Log::info('processWithdrawal validated', [
+            'user_id' => optional($request->user())->id,
+            'currency' => $validated['currency'],
+            'amount' => $validated['amount'],
+            'dest_present' => isset($validated['wallet_address']) && $validated['wallet_address'] !== '',
+        ]);
+
+        // Additional validation for ETH address
     if (in_array($validated['currency'], ['ETH', 'USDT', 'USDC'])) {
         if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $validated['wallet_address'])) {
             return back()->withErrors(['wallet_address' => 'Invalid Ethereum address format']);
         }
     }
+
+        // Additional validation for SOL address (Base58)
+        if ($validated['currency'] === 'SOL') {
+            // Base58 character set: 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+            // Allow typical Solana pubkey lengths 32-44
+            if (!preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,44}$/', $validated['wallet_address'])) {
+                Log::warning('processWithdrawal invalid SOL address', [
+                    'user_id' => optional($request->user())->id,
+                    'address' => $validated['wallet_address'],
+                ]);
+                return back()->withErrors(['wallet_address' => 'Invalid Solana address format']);
+            }
+        }
 
     // Set minimum amount based on currency
     $minAmounts = [
@@ -286,6 +314,7 @@ public function processWithdrawal(Request $request)
         'USDT' => 0.000001,
         'USDC' => 0.000001,
         'BTC' => 0.000001,
+            'SOL' => 0.001,
     ];
 
     if ($validated['amount'] < ($minAmounts[$validated['currency']] ?? 0)) {
@@ -297,7 +326,7 @@ public function processWithdrawal(Request $request)
     // Set destination and method
     $validated['method'] = in_array($validated['currency'], ['NGN', 'USD']) ? 'bank' : 'crypto';
     $validated['destination'] = $validated['wallet_address'] ?? '';
-    
+
     // For fiat currencies, we need bank details
     if ($validated['method'] === 'bank') {
         // Handle bank withdrawal
@@ -306,26 +335,54 @@ public function processWithdrawal(Request $request)
             'account_number' => 'required|string|max:50',
             'account_name' => 'required|string|max:255',
         ]);
-        
+
         $validated['destination'] = json_encode($bankDetails);
     }
 
     $user = $request->user();
-    
+    Log::info('processWithdrawal user resolved', [
+        'user_id' => optional($user)->id,
+    ]);
+
     // Get user's wallet for the selected currency
     $wallet = UserWallets::where('user_id', $user->id)
         ->whereHas('chain', function($q) use ($validated) {
             $q->where('symbol', $validated['currency']);
         })
         ->first();
-        
+    Log::info('processWithdrawal wallet query done', [
+        'found' => (bool)$wallet,
+    ]);
+
     if (!$wallet) {
+        Log::warning('processWithdrawal no wallet found for currency', [
+            'user_id' => $user->id,
+            'currency' => $validated['currency'],
+        ]);
         return back()->withErrors(['wallet' => 'No wallet found for the selected currency']);
     }
 
+    Log::info('processWithdrawal wallet found', [
+        'user_id' => $user->id,
+        'currency' => $validated['currency'],
+        'wallet_id' => $wallet->id,
+        'address' => $wallet->address,
+    ]);
+
     // Check if user has sufficient balance
     $balance = $this->getUserBalance($user->id, $validated['currency']);
+    Log::info('processWithdrawal internal balance check', [
+        'currency' => $validated['currency'],
+        'balance' => $balance,
+        'amount' => $validated['amount'],
+    ]);
     if ($balance < $validated['amount']) {
+        Log::warning('processWithdrawal insufficient internal balance', [
+            'user_id' => $user->id,
+            'currency' => $validated['currency'],
+            'have' => $balance,
+            'want' => $validated['amount'],
+        ]);
         return back()->withErrors(['amount' => 'Insufficient balance']);
     }
 
@@ -355,10 +412,15 @@ public function processWithdrawal(Request $request)
                 $validated['destination'],
                 $validated['amount'],
                 $validated['currency'],
-                $validated['network'] ?? 'ethereum',
+                ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
                 $validated['memo'] ?? null
             )->onQueue('withdrawals');
-            
+            Log::info('processWithdrawal job dispatched', [
+                'withdrawal_id' => $withdrawal->id,
+                'queue' => 'withdrawals',
+                'network' => ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
+            ]);
+
             $message = 'Crypto withdrawal submitted. It may take a few minutes to process.';
         } else {
             // For bank withdrawals, mark as pending admin approval
@@ -368,26 +430,26 @@ public function processWithdrawal(Request $request)
         }
 
         return back()->with('success', $message);
-        
+
     } catch (\Exception $e) {
         $withdrawal->update([
             'status' => 'failed',
             'failure_reason' => $e->getMessage()
         ]);
-        
+
         Log::error('Withdrawal failed', [
             'user_id' => $user->id,
             'error' => $e->getMessage(),
             'trace' => $e->getTraceAsString(),
         ]);
-        
+
         return back()->withErrors(['withdrawal' => 'Failed to process withdrawal. Please try again.']);
     }
 }
 
     /**
      * Get user's balance for a specific currency
-     * 
+     *
      * @param int $userId
      * @param string $currency
      * @return float
@@ -397,14 +459,119 @@ public function processWithdrawal(Request $request)
         $balance = WalletBalances::where('user_id', $userId)
             ->where('currency', $currency)
             ->first();
-        
+
         if (!$balance) {
             return 0;
         }
-        
+
         // For cryptocurrencies, use token_balance, otherwise use balance_minor
-        return in_array($currency, ['ETH', 'USDT', 'USDC', 'BTC']) 
-            ? (float)$balance->token_balance 
+        return in_array($currency, ['ETH', 'USDT', 'USDC', 'BTC', 'SOL'])
+            ? (float)$balance->token_balance
             : (float)$balance->balance_minor;
+    }
+
+    /**
+     * Request devnet tokens from Solana faucet (devnet only)
+     */
+    public function requestDevnetTokens(Request $request, SolanaService $solanaService)
+    {
+        $request->validate([
+            'wallet_id' => 'required|exists:user_wallets,id',
+            'amount' => 'nullable|numeric|min:0.1|max:5',
+        ]);
+
+        $user = Auth::user();
+        $wallet = UserWallets::where('id', $request->wallet_id)
+            ->where('user_id', $user->id)
+            ->with('chain')
+            ->firstOrFail();
+
+        // Only allow for Solana wallets
+        if ($wallet->chain->slug !== 'solana') {
+            return response()->json([
+                'success' => false,
+                'message' => 'This feature only works for Solana wallets',
+            ], 400);
+        }
+
+        // Only allow on devnet
+        $network = config('services.solana.network', 'devnet');
+        if ($network !== 'devnet') {
+            return response()->json([
+                'success' => false,
+                'message' => "Faucet only available on devnet. Current network: {$network}",
+            ], 400);
+        }
+
+        $amount = $request->input('amount', 1.0);
+        $lamports = $solanaService->convertToLamports($amount);
+
+        try {
+            // Request airdrop
+            $signature = $this->requestAirdrop($wallet->address, $lamports);
+
+            if (!$signature) {
+                throw new \RuntimeException('Failed to request airdrop from faucet');
+            }
+
+            Log::info('Devnet faucet request successful', [
+                'user_id' => $user->id,
+                'wallet_id' => $wallet->id,
+                'address' => $wallet->address,
+                'amount' => $amount,
+                'signature' => $signature,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Successfully requested {$amount} SOL from devnet faucet",
+                'signature' => $signature,
+                'explorer_url' => $solanaService->getTransactionUrl($signature),
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('Devnet faucet request failed', [
+                'user_id' => $user->id,
+                'wallet_id' => $wallet->id,
+                'address' => $wallet->address,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to request tokens: ' . $e->getMessage(),
+                'fallback_url' => 'https://faucet.solana.com',
+            ], 500);
+        }
+    }
+
+    /**
+     * Request airdrop from Solana devnet
+     */
+    private function requestAirdrop(string $address, int $lamports): ?string
+    {
+        $rpcUrl = config('services.solana.rpc', 'https://api.devnet.solana.com');
+        
+        $payload = [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'requestAirdrop',
+            'params' => [$address, $lamports],
+        ];
+
+        $response = Http::timeout(30)->post($rpcUrl, $payload);
+
+        if (!$response->ok()) {
+            throw new \RuntimeException("RPC error: HTTP {$response->status()}");
+        }
+
+        $json = $response->json();
+        
+        if (isset($json['error'])) {
+            $errorMsg = $json['error']['message'] ?? 'Unknown error';
+            throw new \RuntimeException("Faucet error: {$errorMsg}");
+        }
+
+        return $json['result'] ?? null;
     }
 }

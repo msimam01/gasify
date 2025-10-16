@@ -29,7 +29,7 @@ interface NetworkInfo {
 export default function WalletWithdraw({ balances }: { balances: WalletBalance[] }) {
   const [selectedMethod, setSelectedMethod] = useState('bank');
   const [selectedCurrency, setSelectedCurrency] = useState(balances.length > 0 ? balances[0].currency : 'NGN');
-  
+
   const { data, setData, post, processing, errors } = useForm({
     amount: '',
     currency: selectedCurrency,
@@ -63,7 +63,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   // Check if currency is fiat
   const isFiat = ['NGN', 'USD'].includes(selectedCurrency);
   const isSolana = selectedCurrency === 'SOL';
-  
+
   // Get available networks for selected currency
   const availableNetworks = networks.filter(n => n.currencies.includes(selectedCurrency));
 
@@ -99,7 +99,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   // Handle form submit
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    post(route('wallet.withdraw.process'));
+    post('/wallet/withdraw/process');
   };
 
   // Handle quick amount select
@@ -111,7 +111,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   const handleCurrencyChange = (value: string) => {
     setSelectedCurrency(value);
     setData('currency', value);
-    
+
     // Reset to bank transfer when switching to fiat
     if (['NGN', 'USD'].includes(value)) {
       setSelectedMethod('bank');
@@ -208,8 +208,8 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                         <Label htmlFor="amount">Amount</Label>
                         <div className="flex gap-2">
                           {/* Currency Select */}
-                          <Select 
-                            value={selectedCurrency} 
+                          <Select
+                            value={selectedCurrency}
                             onValueChange={handleCurrencyChange}
                           >
                             <SelectTrigger className="w-28">
@@ -271,15 +271,15 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                       <CardTitle>Withdrawal Method</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      <Tabs 
-                        value={selectedMethod} 
+                      <Tabs
+                        value={selectedMethod}
                         onValueChange={setSelectedMethod}
                         className="w-full"
                       >
                         <TabsList className="grid w-full grid-cols-2">
                           {withdrawalMethods.map((method) => (
-                            <TabsTrigger 
-                              key={method.id} 
+                            <TabsTrigger
+                              key={method.id}
                               value={method.id}
                               disabled={!method.enabled}
                             >
@@ -344,7 +344,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                             <Alert>
                               <IconAlertCircle className="h-4 w-4" />
                               <AlertDescription>
-                                Solana withdrawals are fast and typically confirm within seconds. 
+                                Solana withdrawals are fast and typically confirm within seconds.
                                 Make sure you're sending to a Solana wallet address.
                               </AlertDescription>
                             </Alert>
@@ -384,7 +384,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                           {!isSolana && availableNetworks.length > 0 && (
                             <div className="space-y-2">
                               <Label htmlFor="network">Network</Label>
-                              <Select 
+                              <Select
                                 name="network"
                                 value={data.network}
                                 onValueChange={(value) => setData('network', value)}
@@ -426,8 +426,8 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                             <div className="flex justify-between text-sm">
                               <span className="text-muted-foreground">Network</span>
                               <span className="font-medium">
-                                {isSolana 
-                                  ? 'Solana' 
+                                {isSolana
+                                  ? 'Solana'
                                   : availableNetworks.find(n => n.id === data.network)?.name || 'Not selected'}
                               </span>
                             </div>
@@ -468,8 +468,8 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Method</span>
                           <span className="font-medium">
-                            {selectedMethod === 'bank' ? 'Bank Transfer' : 
-                             isSolana ? 'Solana Network' : 
+                            {selectedMethod === 'bank' ? 'Bank Transfer' :
+                             isSolana ? 'Solana Network' :
                              availableNetworks.find(n => n.id === data.network)?.name || 'Crypto Wallet'}
                           </span>
                         </div>
@@ -490,8 +490,8 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                     <Alert variant="destructive">
                       <IconAlertCircle className="h-4 w-4" />
                       <AlertDescription>
-                        <strong>Important:</strong> Double-check your wallet address and network. 
-                        {isSolana 
+                        <strong>Important:</strong> Double-check your wallet address and network.
+                        {isSolana
                           ? ' Sending SOL to a non-Solana address will result in permanent loss of funds.'
                           : ' Sending to the wrong address or network will result in permanent loss of funds.'}
                       </AlertDescription>
@@ -500,9 +500,9 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
 
                   {/* Withdrawal Button */}
                   <div className="flex justify-end">
-                    <Button 
-                      type="submit" 
-                      size="lg" 
+                    <Button
+                      type="submit"
+                      size="lg"
                       className="w-full sm:w-auto"
                       disabled={processing || !data.amount || (selectedMethod === 'crypto' && !data.wallet_address) || (!isSolana && selectedMethod === 'crypto' && !data.network)}
                     >

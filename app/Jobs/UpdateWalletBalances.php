@@ -18,10 +18,10 @@ class UpdateWalletBalances implements ShouldQueue
 
     public function handle(WalletService $walletService): void
     {
-       \Log::info("UpdateWalletBalances job started!");
+       Log::info("UpdateWalletBalances job started!");
 
     $wallets = UserWallets::with('chain')->get();
-    \Log::info("Found wallets: " . $wallets->count());
+    Log::info("Found wallets: " . $wallets->count());
         foreach ($wallets as $wallet) {
             try {
                 $balance = 0;
@@ -43,6 +43,13 @@ class UpdateWalletBalances implements ShouldQueue
                         $balance = 0;
                 }
 
+                // Log then update token balance for all chains
+                Log::info("Updating balance", [
+                    'chain' => $wallet->chain->slug,
+                    'address' => $wallet->address,
+                    'balance' => $balance,
+                ]);
+
                 // update or create WalletBalances row
                 WalletBalances::updateOrCreate(
                     [
@@ -54,7 +61,12 @@ class UpdateWalletBalances implements ShouldQueue
                     ]
                 );
             } catch (\Throwable $e) {
-                Log::error("Balance update failed for wallet {$wallet->id}: {$e->getMessage()}");
+                Log::error("Balance update failed", [
+                    'wallet_id' => $wallet->id,
+                    'chain' => optional($wallet->chain)->slug,
+                    'address' => $wallet->address,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
     }

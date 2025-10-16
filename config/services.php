@@ -43,7 +43,8 @@ return [
         'rpc' => env('SIDRA_RPC', 'https://sidrachain-public-rpc'),
     ],
     'solana' => [
-        'rpc' => env('SOLANA_RPC', 'https://api.devnet.solana.com'),
+        'rpc' => env('SOLANA_RPC_URL', 'https://api.devnet.solana.com'),
+        'network' => env('SOLANA_NETWORK', 'devnet'),
     ],
 
 

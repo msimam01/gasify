@@ -2,731 +2,606 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
-use Exception;
+use Illuminate\Support\Facades\Log;
 
 class SolanaService
 {
     protected string $rpcUrl;
     protected string $network;
-    
-    // Solana constants
-    const LAMPORTS_PER_SOL = 1000000000; // 1 SOL = 1 billion lamports
-    const COMMITMENT_FINALIZED = 'finalized';
-    const COMMITMENT_CONFIRMED = 'confirmed';
+
+    // Program IDs
+    private const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+    private const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
     public function __construct()
     {
-        $this->rpcUrl = env('SOLANA_RPC', 'https://api.devnet.solana.com');
-        $this->network = str_contains($this->rpcUrl, 'mainnet') ? 'mainnet' : 'devnet';
-    }
-
-    /**
-     * Set the RPC URL dynamically
-     */
-    public function setRpcUrl(string $url): self
-    {
-        $this->rpcUrl = $url;
-        $this->network = str_contains($url, 'mainnet') ? 'mainnet' : 'devnet';
-        return $this;
-    }
-
-    /**
-     * Make RPC call to Solana node
-     */
-    protected function rpcCall(string $method, array $params = []): array
-    {
-        try {
-            $response = Http::timeout(30)->post($this->rpcUrl, [
-                'jsonrpc' => '2.0',
-                'id' => 1,
-                'method' => $method,
-                'params' => $params,
+        $this->rpcUrl = config('services.solana.rpc', 'https://api.devnet.solana.com');
+        $this->network = config('services.solana.network', env('SOLANA_NETWORK', 'devnet'));
+        
+        // Verify System Program ID decodes to 32 bytes
+        $systemProgramBytes = $this->base58Decode(self::SYSTEM_PROGRAM_ID);
+        if (strlen($systemProgramBytes) !== 32) {
+            Log::warning('System Program ID decoded to unexpected length', [
+                'length' => strlen($systemProgramBytes),
+                'hex' => bin2hex($systemProgramBytes),
             ]);
-
-            if (!$response->successful()) {
-                throw new Exception("RPC call failed: " . $response->body());
-            }
-
-            $data = $response->json();
-
-            if (isset($data['error'])) {
-                throw new Exception("Solana RPC error: " . json_encode($data['error']));
-            }
-
-            return $data;
-        } catch (Exception $e) {
-            Log::error('Solana RPC call failed', [
-                'method' => $method,
-                'params' => $params,
-                'error' => $e->getMessage(),
-            ]);
-            throw $e;
         }
     }
 
-    /**
-     * Get balance in SOL for an address
-     */
-    public function getBalance(string $address): float
+    public function setNetwork(string $network = 'devnet'): void
     {
-        $result = $this->rpcCall('getBalance', [
-            $address,
-            ['commitment' => self::COMMITMENT_FINALIZED]
-        ]);
-
-        $lamports = $result['result']['value'] ?? 0;
-        return $this->lamportsToSol($lamports);
+        $this->network = $network;
     }
 
-    /**
-     * Get balance in lamports for an address
-     */
-    public function getBalanceInLamports(string $address): int
+    public function validateAddress(string $address): bool
     {
-        $result = $this->rpcCall('getBalance', [
-            $address,
-            ['commitment' => self::COMMITMENT_FINALIZED]
-        ]);
-
-        return $result['result']['value'] ?? 0;
+        return (bool)preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,44}$/', $address);
     }
 
-    /**
-     * Send SOL transaction
-     * 
-     * @param array $params ['from' => address, 'to' => address, 'amount' => float, 'private_key' => base58]
-     * @return string Transaction signature
-     */
+    public function convertToLamports(float $solAmount): int
+    {
+        return (int)round($solAmount * 1_000_000_000);
+    }
+
+    public function convertFromLamports(int $lamports): float
+    {
+        return $lamports / 1_000_000_000;
+    }
+
+    public function getBalance(string $publicKey): int
+    {
+        $resp = $this->rpc('getBalance', [$publicKey]);
+        return (int)($resp['result']['value'] ?? 0);
+    }
+
+    public function getAccountInfo(string $publicKey): ?array
+    {
+        try {
+            $resp = $this->rpc('getAccountInfo', [$publicKey, ['encoding' => 'base64']]);
+            return $resp['result']['value'] ?? null;
+        } catch (\Throwable $e) {
+            Log::error('Failed to get account info', [
+                'address' => $publicKey,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    public function getLatestBlockhash(): string
+    {
+        $resp = $this->rpc('getLatestBlockhash', []);
+        return $resp['result']['value']['blockhash'] ?? '';
+    }
+
+    public function estimateFee(array $instructions): int
+    {
+        // Typical fee on devnet/mainnet for simple transfer
+        return 5000;
+    }
+
     public function sendTransaction(array $params): string
     {
-        foreach (['from', 'to', 'amount', 'private_key'] as $field) {
-            if (!isset($params[$field])) {
-                throw new Exception("Missing required parameter: {$field}");
-            }
+        $from = $params['from'] ?? '';
+        $to = $params['to'] ?? '';
+        $amountLamports = $params['amount'] ?? 0;
+        $privateKeyBase64 = $params['private_key'] ?? '';
+        $memo = $params['memo'] ?? null;
+
+        if (!$this->validateAddress($from) || !$this->validateAddress($to)) {
+            throw new \InvalidArgumentException('Invalid Solana address');
         }
 
-        $fromAddress = $params['from'];
-        $toAddress = $params['to'];
-        $amount = $params['amount'];
-        $privateKey = $params['private_key'];
+        // Validate sender account
+        $senderInfo = $this->getAccountInfo($from);
+        if ($senderInfo === null) {
+            throw new \RuntimeException("Sender account does not exist on {$this->network}. Please fund the account first.");
+        }
 
-        // Validate addresses
-        $this->validateAddress($fromAddress);
-        $this->validateAddress($toAddress);
-
-        // Convert SOL to lamports
-        $lamports = $this->solToLamports($amount);
-
-        Log::info('Initiating Solana transaction', [
-            'network' => $this->network,
-            'from' => $fromAddress,
-            'to' => $toAddress,
-            'amount_sol' => $amount,
-            'amount_lamports' => $lamports,
+        $senderBalance = $this->getBalance($from);
+        Log::info('Sender balance check', [
+            'address' => $from,
+            'balance_lamports' => $senderBalance,
+            'required_lamports' => $amountLamports
         ]);
 
-        try {
-            // Get recent blockhash
-            $recentBlockhash = $this->getRecentBlockhash();
+        if (!is_int($amountLamports) || $amountLamports <= 0) {
+            throw new \InvalidArgumentException('Invalid lamports amount');
+        }
 
-            // Create transaction
-            $transaction = $this->createTransaction([
-                'from' => $fromAddress,
-                'to' => $toAddress,
-                'lamports' => $lamports,
-                'recentBlockhash' => $recentBlockhash,
-            ]);
+        // Decode and validate private key
+        $secretKey = base64_decode($privateKeyBase64, true);
+        if ($secretKey === false || strlen($secretKey) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+            throw new \RuntimeException('Invalid Solana private key format');
+        }
 
-            // Sign transaction
-            $signedTransaction = $this->signTransaction($transaction, $privateKey);
+        $publicKey = sodium_crypto_sign_publickey_from_secretkey($secretKey);
+        $fromPub = $this->base58Encode($publicKey);
+        
+        if ($fromPub !== $from) {
+            throw new \RuntimeException('Private key does not match source address');
+        }
 
-            // Send transaction
-            $signature = $this->sendRawTransaction($signedTransaction);
+        $recentBlockhash = $this->getLatestBlockhash();
+        if (!$recentBlockhash) {
+            throw new \RuntimeException('Failed to fetch recent blockhash');
+        }
 
-            Log::info('Solana transaction sent successfully', [
-                'signature' => $signature,
-                'from' => $fromAddress,
-                'to' => $toAddress,
-                'amount_sol' => $amount,
-                'explorer_url' => $this->getTransactionUrl($signature),
-            ]);
+        // Build instructions
+        $instructions = [
+            $this->buildSystemTransferInstruction($from, $to, $amountLamports),
+        ];
+        
+        if (is_string($memo) && $memo !== '') {
+            $instructions[] = $this->buildMemoInstruction($from, $memo);
+        }
 
-            return $signature;
+        // Compile and sign transaction
+        $message = $this->compileMessage($instructions, $recentBlockhash, $from);
+        
+        // Debug: Log message length
+        Log::debug('Message compiled', [
+            'message_length' => strlen($message),
+            'message_hex' => bin2hex(substr($message, 0, 100)), // First 100 bytes
+        ]);
+        
+        $signature = sodium_crypto_sign_detached($message, $secretKey);
+        
+        // Debug: Log signature length
+        Log::debug('Signature created', [
+            'signature_length' => strlen($signature),
+            'signature_hex' => bin2hex($signature),
+        ]);
+        
+        // Serialize the complete transaction
+        $transaction = $this->serializeTransaction($signature, $message);
+        
+        // Debug: Log transaction length
+        Log::debug('Transaction serialized', [
+            'transaction_length' => strlen($transaction),
+            'transaction_hex' => bin2hex(substr($transaction, 0, 150)), // First 150 bytes
+        ]);
+        
+        $b64Tx = base64_encode($transaction);
 
-        } catch (Exception $e) {
+        // Send transaction
+        $resp = $this->rpc('sendTransaction', [
+            $b64Tx,
+            [
+                'encoding' => 'base64',
+                'skipPreflight' => false,
+                'maxRetries' => 2
+            ]
+        ]);
+        
+        Log::info('Solana sendTransaction response', ['response' => $resp]);
+        
+        $sig = $resp['result'] ?? null;
+        if (!is_string($sig) || $sig === '') {
+            $errorData = $resp['error'] ?? [];
+            $decodedError = $this->decodeSolanaError($errorData);
+            
             Log::error('Solana transaction failed', [
-                'error' => $e->getMessage(),
-                'from' => $fromAddress,
-                'to' => $toAddress,
-                'amount' => $amount,
-                'trace' => $e->getTraceAsString(),
+                'from' => $from,
+                'to' => $to,
+                'amount_lamports' => $amountLamports,
+                'error' => $decodedError,
+                'raw_error' => $errorData,
             ]);
-            throw $e;
+            
+            throw new \RuntimeException($decodedError);
         }
-    }
-
-    /**
-     * Get recent blockhash
-     */
-    protected function getRecentBlockhash(): string
-    {
-        $result = $this->rpcCall('getLatestBlockhash', [
-            ['commitment' => self::COMMITMENT_FINALIZED]
+        
+        Log::info('Solana transaction sent successfully', [
+            'signature' => $sig,
+            'from' => $from,
+            'to' => $to,
+            'amount_lamports' => $amountLamports,
+            'explorer_url' => $this->getTransactionUrl($sig),
         ]);
-
-        return $result['result']['value']['blockhash'] ?? throw new Exception('Failed to get recent blockhash');
+        
+        return $sig;
     }
 
-    /**
-     * Create a transfer transaction
-     */
-    protected function createTransaction(array $params): array
+    public function waitForConfirmation(string $signature, int $timeoutSeconds = 60, int $pollIntervalSeconds = 2): array
     {
-        $from = $params['from'];
-        $to = $params['to'];
-        $lamports = $params['lamports'];
-        $recentBlockhash = $params['recentBlockhash'];
+        $deadline = time() + $timeoutSeconds;
+        do {
+            $resp = $this->rpc('getSignatureStatuses', [[$signature], ['searchTransactionHistory' => true]]);
+            $status = $resp['result']['value'][0] ?? null;
+            if ($status && isset($status['confirmationStatus'])) {
+                if (in_array($status['confirmationStatus'], ['confirmed', 'finalized'])) {
+                    return $status;
+                }
+            }
+            usleep($pollIntervalSeconds * 1_000_000);
+        } while (time() < $deadline);
 
-        // Create transfer instruction
-        $instruction = [
-            'programId' => '11111111111111111111111111111111', // System Program
-            'keys' => [
+        throw new \RuntimeException('Confirmation timeout');
+    }
+
+    public function getTransactionDetails(string $signature): array
+    {
+        $resp = $this->rpc('getTransaction', [$signature, ['encoding' => 'json']]);
+        return $resp['result'] ?? [];
+    }
+
+    public function getTransactionUrl(string $signature): string
+    {
+        $base = 'https://explorer.solana.com/tx/' . $signature;
+        if ($this->network && $this->network !== 'mainnet-beta') {
+            return $base . '?cluster=' . $this->network;
+        }
+        return $base;
+    }
+
+    // --- Instruction Builders & Serialization ---
+
+    private function buildSystemTransferInstruction(string $from, string $to, int $lamports): array
+    {
+        // System Program Transfer instruction data:
+        // - 4 bytes: instruction index (2 = Transfer)
+        // - 8 bytes: lamports (little-endian u64)
+        $data = pack('V', 2) . $this->packU64LE($lamports);
+        
+        return [
+            'programId' => self::SYSTEM_PROGRAM_ID,
+            'accounts' => [
                 ['pubkey' => $from, 'isSigner' => true, 'isWritable' => true],
                 ['pubkey' => $to, 'isSigner' => false, 'isWritable' => true],
             ],
-            'data' => $this->encodeTransferInstruction($lamports),
+            'data' => $data,
         ];
+    }
 
+    private function buildMemoInstruction(string $signer, string $memo): array
+    {
         return [
-            'recentBlockhash' => $recentBlockhash,
-            'feePayer' => $from,
-            'instructions' => [$instruction],
-        ];
-    }
-
-    /**
-     * Encode transfer instruction data
-     */
-    protected function encodeTransferInstruction(int $lamports): string
-    {
-        // Transfer instruction: [2, 0, 0, 0] followed by lamports as 64-bit little-endian
-        $data = pack('V', 2); // Instruction index for transfer
-        $data .= pack('P', $lamports); // 64-bit lamports amount
-        return base64_encode($data);
-    }
-
-    /**
-     * Sign transaction with private key
-     */
-    protected function signTransaction(array $transaction, string $privateKeyBase58): string
-    {
-        // Decode private key from base58
-        $privateKeyBytes = $this->base58Decode($privateKeyBase58);
-        
-        if (strlen($privateKeyBytes) !== 64) {
-            throw new Exception('Invalid private key length. Expected 64 bytes.');
-        }
-
-        // Serialize transaction for signing
-        $messageBytes = $this->serializeTransaction($transaction);
-
-        // Sign the message using Ed25519
-        $signature = $this->ed25519Sign($messageBytes, $privateKeyBytes);
-
-        // Encode signed transaction
-        return $this->encodeSignedTransaction($transaction, $signature, $privateKeyBytes);
-    }
-
-    /**
-     * Serialize transaction to bytes for signing
-     */
-    protected function serializeTransaction(array $transaction): string
-    {
-        // This is a simplified version - production should use proper Solana serialization
-        $message = json_encode([
-            'recentBlockhash' => $transaction['recentBlockhash'],
-            'feePayer' => $transaction['feePayer'],
-            'instructions' => $transaction['instructions'],
-        ]);
-
-        return hash('sha256', $message, true);
-    }
-
-    /**
-     * Sign message with Ed25519
-     */
-    protected function ed25519Sign(string $message, string $privateKey): string
-    {
-        // Use sodium for Ed25519 signing
-        if (!function_exists('sodium_crypto_sign_detached')) {
-            throw new Exception('Sodium extension required for Ed25519 signing');
-        }
-
-        // Extract seed (first 32 bytes) from private key
-        $seed = substr($privateKey, 0, 32);
-        
-        // Generate keypair from seed
-        $keypair = sodium_crypto_sign_seed_keypair($seed);
-        
-        // Sign the message
-        $signature = sodium_crypto_sign_detached($message, $keypair);
-
-        return $signature;
-    }
-
-    /**
-     * Encode signed transaction for submission
-     */
-    protected function encodeSignedTransaction(array $transaction, string $signature, string $privateKey): string
-    {
-        // Get public key from private key (last 32 bytes)
-        $publicKey = substr($privateKey, 32, 32);
-
-        // Create signed transaction structure
-        $signedTx = [
-            'signatures' => [base64_encode($signature)],
-            'message' => [
-                'header' => [
-                    'numRequiredSignatures' => 1,
-                    'numReadonlySignedAccounts' => 0,
-                    'numReadonlyUnsignedAccounts' => 1,
-                ],
-                'accountKeys' => [
-                    base64_encode($this->base58Decode($transaction['feePayer'])),
-                    base64_encode($this->base58Decode($transaction['instructions'][0]['keys'][1]['pubkey'])),
-                    base64_encode($this->base58Decode($transaction['instructions'][0]['programId'])),
-                ],
-                'recentBlockhash' => $transaction['recentBlockhash'],
-                'instructions' => [
-                    [
-                        'programIdIndex' => 2,
-                        'accounts' => [0, 1],
-                        'data' => $transaction['instructions'][0]['data'],
-                    ],
-                ],
+            'programId' => self::MEMO_PROGRAM_ID,
+            'accounts' => [
+                ['pubkey' => $signer, 'isSigner' => true, 'isWritable' => false],
             ],
+            'data' => $memo,
         ];
-
-        return base64_encode(json_encode($signedTx));
     }
-
-    /**
-     * Send raw signed transaction
-     */
-    protected function sendRawTransaction(string $signedTransaction): string
-    {
-        $result = $this->rpcCall('sendTransaction', [
-            $signedTransaction,
-            ['encoding' => 'base64']
-        ]);
-
-        return $result['result'] ?? throw new Exception('Failed to send transaction');
-    }
-
-    /**
-     * Wait for transaction confirmation
-     */
-    public function waitForConfirmation(string $signature, int $maxAttempts = 30, int $delaySeconds = 2): array
-    {
-        for ($i = 0; $i < $maxAttempts; $i++) {
-            try {
-                $status = $this->getTransactionStatus($signature);
-                
-                if (isset($status['result']['value']) && $status['result']['value'] !== null) {
-                    return $status['result']['value'];
-                }
-            } catch (Exception $e) {
-                Log::debug("Waiting for confirmation attempt {$i}/{$maxAttempts}", [
-                    'signature' => $signature,
-                ]);
-            }
-
-            sleep($delaySeconds);
+    private function compileLegacyMessage(array $instructions, string $recentBlockhash, string $feePayer): string
+{
+    // Collect unique accounts with metadata
+    $accountMetas = [];
+    $accountKeysMap = [];
+    
+    $addAccount = function(string $pubkey, bool $isSigner, bool $isWritable) use (&$accountMetas, &$accountKeysMap) {
+        if (!isset($accountKeysMap[$pubkey])) {
+            $accountKeysMap[$pubkey] = count($accountMetas);
+            $accountMetas[] = [
+                'pubkey' => $pubkey,
+                'isSigner' => $isSigner,
+                'isWritable' => $isWritable,
+            ];
         }
-
-        throw new Exception("Transaction confirmation timeout for signature: {$signature}");
+    };
+    
+    // 1. Fee payer FIRST (required)
+    $addAccount($feePayer, true, true);
+    
+    // 2. Add all instruction accounts + programs
+    foreach ($instructions as $ix) {
+        // Add instruction accounts
+        foreach ($ix['accounts'] as $acc) {
+            $addAccount($acc['pubkey'], $acc['isSigner'], $acc['isWritable']);
+        }
+        // Add program ID (readonly, non-signer)
+        $addAccount($ix['programId'], false, false);
     }
-
-    /**
-     * Get transaction status
-     */
-    public function getTransactionStatus(string $signature): array
-    {
-        return $this->rpcCall('getSignatureStatuses', [
-            [$signature],
-            ['searchTransactionHistory' => true]
-        ]);
+    
+    // 3. CRITICAL: Sort accounts in Solana order
+    $sorted = $this->sortAccountsForSolana($accountMetas);
+    
+    // 4. Build header
+    $numReqSigs = count(array_filter($sorted, fn($a) => $a['isSigner']));
+    $numReadOnlySigned = count(array_filter($sorted, fn($a) => $a['isSigner'] && !$a['isWritable']));
+    $numReadOnlyUnsigned = count(array_filter($sorted, fn($a) => !$a['isSigner'] && !$a['isWritable']));
+    
+    $header = pack('C3', $numReqSigs, $numReadOnlySigned, $numReadOnlyUnsigned);
+    
+    // 5. Serialize account keys (compact length + 32-byte keys)
+    $accountKeysBin = $this->compactArrayLength(count($sorted));
+    foreach ($sorted as $meta) {
+        $keyBin = $this->base58Decode($meta['pubkey']);
+        if (strlen($keyBin) !== 32) {
+            throw new \RuntimeException("Invalid pubkey length: " . strlen($keyBin));
+        }
+        $accountKeysBin .= $keyBin;
     }
-
-    /**
-     * Get transaction details
-     */
-    public function getTransaction(string $signature): array
-    {
-        return $this->rpcCall('getTransaction', [
-            $signature,
-            ['encoding' => 'json', 'commitment' => self::COMMITMENT_FINALIZED]
-        ]);
+    
+    // 6. Recent blockhash (32 bytes)
+    $blockhashBin = $this->base58Decode($recentBlockhash);
+    if (strlen($blockhashBin) !== 32) {
+        throw new \RuntimeException("Invalid blockhash length: " . strlen($blockhashBin));
     }
-
-    /**
-     * Get transaction URL (explorer link)
-     */
-    public function getTransactionUrl(string $signature): string
-    {
-        $baseUrl = $this->network === 'mainnet' 
-            ? 'https://explorer.solana.com/tx/'
-            : 'https://explorer.solana.com/tx/?cluster=devnet&';
+    
+    // 7. Build account index map
+    $keyToIndex = [];
+    foreach ($sorted as $idx => $meta) {
+        $keyToIndex[$meta['pubkey']] = $idx;
+    }
+    
+    // 8. Serialize instructions
+    $instructionsBin = $this->compactArrayLength(count($instructions));
+    foreach ($instructions as $ix) {
+        // Program ID index
+        $programIdIndex = $keyToIndex[$ix['programId']];
+        $instructionsBin .= pack('C', $programIdIndex);
         
-        return $baseUrl . $signature;
-    }
-
-    /**
-     * Validate Solana address
-     */
-    protected function validateAddress(string $address): bool
-    {
-        // Solana addresses are base58 encoded and typically 32-44 characters
-        if (strlen($address) < 32 || strlen($address) > 44) {
-            throw new Exception("Invalid Solana address length: {$address}");
+        // Account indices
+        $accountIndices = array_map(fn($acc) => $keyToIndex[$acc['pubkey']], $ix['accounts']);
+        $instructionsBin .= $this->compactArrayLength(count($accountIndices));
+        foreach ($accountIndices as $i) {
+            $instructionsBin .= pack('C', $i);
         }
+        
+        // Instruction data
+        $data = $ix['data'];
+        $instructionsBin .= $this->compactArrayLength(strlen($data));
+        $instructionsBin .= $data;
+    }
+    
+    // 9. FINAL MESSAGE
+    $message = $header . $accountKeysBin . $blockhashBin . $instructionsBin;
+    
+    Log::debug('Legacy message compiled', [
+        'length' => strlen($message),
+        'header' => bin2hex(substr($message, 0, 3)),
+        'num_accounts' => count($sorted),
+        'num_instructions' => count($instructions),
+        'hex_preview' => bin2hex(substr($message, 0, 100))
+    ]);
+    
+    return $message;
+}
+private function sortAccountsForSolana(array $accountMetas): array
+{
+    // Solana REQUIRED ORDER:
+    // 1. Signer + Writable
+    // 2. Signer + Readonly  
+    // 3. Non-signer + Writable
+    // 4. Non-signer + Readonly
+    $buckets = [
+        'signer_writable' => [],
+        'signer_readonly' => [],
+        'nonsigner_writable' => [],
+        'nonsigner_readonly' => []
+    ];
+    
+    foreach ($accountMetas as $meta) {
+        $bucket = match (true) {
+            $meta['isSigner'] && $meta['isWritable'] => 'signer_writable',
+            $meta['isSigner'] && !$meta['isWritable'] => 'signer_readonly',
+            !$meta['isSigner'] && $meta['isWritable'] => 'nonsigner_writable',
+            default => 'nonsigner_readonly'
+        };
+        $buckets[$bucket][] = $meta;
+    }
+    
+    return array_merge(
+        $buckets['signer_writable'],
+        $buckets['signer_readonly'],
+        $buckets['nonsigner_writable'],
+        $buckets['nonsigner_readonly']
+    );
+}
+    private function compileMessage(array $instructions, string $recentBlockhash, string $feePayer): string
+{
+    return $this->compileLegacyMessage($instructions, $recentBlockhash, $feePayer);
+}
 
-        // Check if it's valid base58
-        try {
-            $decoded = $this->base58Decode($address);
-            if (strlen($decoded) !== 32) {
-                throw new Exception("Invalid Solana address: {$address}");
+private function serializeTransaction(string $signature, string $messageBinary): string
+{
+    // FIXED: Proper transaction serialization
+    $numSignaturesBin = $this->compactArrayLength(1); // 1 signature
+    $signaturesBin = $signature; // 64 bytes
+    $messageBin = $messageBinary;
+    
+    $transaction = $numSignaturesBin . $signaturesBin . $messageBin;
+    
+    Log::debug('Transaction serialized', [
+        'total_length' => strlen($transaction),
+        'signatures_length' => strlen($numSignaturesBin) + 64,
+        'message_length' => strlen($messageBin),
+        'hex_preview' => bin2hex(substr($transaction, 0, 50))
+    ]);
+    
+    return $transaction;
+}
+// Add to SolanaService for testing
+public function debugTransaction(string $from, string $to, int $lamports, string $privateKey): void
+{
+    $blockhash = $this->getLatestBlockhash();
+    $instructions = [$this->buildSystemTransferInstruction($from, $to, $lamports)];
+    $message = $this->compileLegacyMessage($instructions, $blockhash, $from);
+    $secretKey = base64_decode($privateKey);
+    $signature = sodium_crypto_sign_detached($message, $secretKey);
+    $tx = $this->serializeTransaction($signature, $message);
+    
+    Log::info('DEBUG TRANSACTION', [
+        'message_length' => strlen($message),
+        'expected_message' => 123 + (32 * 3) + 32, // header + 3 accounts + blockhash
+        'signature_length' => strlen($signature),
+        'total_tx_length' => strlen($tx),
+        'expected_tx' => 1 + 64 + (123 + 96 + 32), // compact(1) + sig + message
+        'base64_preview' => substr(base64_encode($tx), 0, 100)
+    ]);
+}
+    private function decodeSolanaError(array $errorData): string
+    {
+        $message = $errorData['message'] ?? 'Unknown error';
+        $code = $errorData['code'] ?? null;
+        
+        $errorPatterns = [
+            'AccountNotFound' => 'Account does not exist on the blockchain',
+            'InsufficientFunds' => 'Insufficient funds for transaction',
+            'InvalidAccountData' => 'Invalid account data',
+            'InvalidArgument' => 'Invalid argument provided',
+            'InvalidInstruction' => 'Invalid instruction',
+            'BlockhashNotFound' => 'Blockhash expired, please retry',
+            'SignatureVerificationFailed' => 'Signature verification failed - check private key',
+        ];
+        
+        foreach ($errorPatterns as $pattern => $readable) {
+            if (stripos($message, $pattern) !== false) {
+                return "$readable: $message";
             }
-        } catch (Exception $e) {
-            throw new Exception("Invalid Solana address format: {$address}");
         }
-
-        return true;
+        
+        return "Solana RPC Error (code: $code): $message";
     }
 
-    /**
-     * Convert SOL to lamports
-     */
-    public function solToLamports(float $sol): int
+    // --- Helpers ---
+
+    private function rpc(string $method, array $params): array
     {
-        return (int) bcmul((string) $sol, (string) self::LAMPORTS_PER_SOL, 0);
+        $payload = [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => $method,
+            'params' => $params,
+        ];
+        
+        Log::debug('Solana RPC request', [
+            'method' => $method,
+            'params' => $params,
+            'rpc_url' => $this->rpcUrl
+        ]);
+        
+        $resp = Http::timeout(20)->post($this->rpcUrl, $payload);
+        
+        if (!$resp->ok()) {
+            Log::error('Solana RPC HTTP error', [
+                'status' => $resp->status(),
+                'body' => $resp->body()
+            ]);
+            throw new \RuntimeException("RPC error: HTTP {$resp->status()}");
+        }
+        
+        $json = $resp->json();
+        
+        if (isset($json['error'])) {
+            Log::warning('Solana RPC returned error', [
+                'method' => $method,
+                'error' => $json['error']
+            ]);
+        }
+        
+        return $json;
     }
 
-    /**
-     * Convert lamports to SOL
-     */
-    public function lamportsToSol(int $lamports): float
-    {
-        return (float) bcdiv((string) $lamports, (string) self::LAMPORTS_PER_SOL, 9);
-    }
-
-    /**
-     * Base58 decode
-     */
-    protected function base58Decode(string $string): string
+    private function base58Encode(string $data): string
     {
         $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-        $base = strlen($alphabet);
-        
-        $decoded = gmp_init(0);
-        $multi = gmp_init(1);
-        
-        for ($i = strlen($string) - 1; $i >= 0; $i--) {
-            $char = $string[$i];
-            $pos = strpos($alphabet, $char);
-            
-            if ($pos === false) {
-                throw new Exception("Invalid base58 character: {$char}");
-            }
-            
-            $decoded = gmp_add($decoded, gmp_mul($multi, $pos));
-            $multi = gmp_mul($multi, $base);
-        }
-        
-        $hex = gmp_strval($decoded, 16);
-        if (strlen($hex) % 2 !== 0) {
-            $hex = '0' . $hex;
-        }
-        
-        return hex2bin($hex);
-    }
-
-    /**
-     * Base58 encode
-     */
-    protected function base58Encode(string $data): string
-    {
-        $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-        $base = strlen($alphabet);
-        
         $num = gmp_init(bin2hex($data), 16);
         $encoded = '';
         
         while (gmp_cmp($num, 0) > 0) {
-            list($num, $remainder) = gmp_div_qr($num, $base);
-            $encoded = $alphabet[gmp_intval($remainder)] . $encoded;
+            [$num, $rem] = gmp_div_qr($num, 58);
+            $encoded = $alphabet[gmp_intval($rem)] . $encoded;
         }
         
-        // Add leading zeros
-        for ($i = 0; $i < strlen($data) && $data[$i] === "\0"; $i++) {
-            $encoded = $alphabet[0] . $encoded;
+        // Preserve leading zeros
+        foreach (str_split($data) as $c) {
+            if ($c === "\x00") {
+                $encoded = '1' . $encoded;
+            } else {
+                break;
+            }
         }
         
-        return $encoded;
+        return $encoded === '' ? '1' : $encoded;
     }
 
-    /**
-     * Generate a new Solana keypair
-     */
-    public function generateKeypair(): array
+    private function base58Decode(string $str): string
     {
-        $keypair = sodium_crypto_sign_keypair();
-        $publicKey = sodium_crypto_sign_publickey($keypair);
-        $privateKey = sodium_crypto_sign_secretkey($keypair);
-
-        return [
-            'public_key' => $this->base58Encode($publicKey),
-            'private_key' => $this->base58Encode($privateKey),
-            'address' => $this->base58Encode($publicKey),
-        ];
+        $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+        $indexes = array_flip(str_split($alphabet));
+        
+        // Count leading '1's (which represent leading zero bytes)
+        $leadingZeros = 0;
+        foreach (str_split($str) as $c) {
+            if ($c === '1') {
+                $leadingZeros++;
+            } else {
+                break;
+            }
+        }
+        
+        // If entire string is '1's, return all zeros
+        if ($leadingZeros === strlen($str)) {
+            // For Solana addresses/keys, always 32 bytes
+            return str_repeat("\x00", 32);
+        }
+        
+        $num = gmp_init(0, 10);
+        foreach (str_split($str) as $char) {
+            if (!isset($indexes[$char])) {
+                throw new \InvalidArgumentException('Invalid base58 character: ' . $char);
+            }
+            $num = gmp_add(gmp_mul($num, 58), $indexes[$char]);
+        }
+        
+        $hex = gmp_strval($num, 16);
+        if (strlen($hex) % 2) {
+            $hex = '0' . $hex;
+        }
+        
+        $bin = hex2bin($hex);
+        if ($bin === false) {
+            $bin = '';
+        }
+        
+        return str_repeat("\x00", $leadingZeros) . $bin;
     }
 
-    /**
-     * Get Keypair from wallet model
-     */
+    private function compactArrayLength(int $len): string
+    {
+        // FIXED: Proper Solana compact-u16 (short-vec) encoding
+        $bytes = '';
+        do {
+            $elem = $len & 0x7F;
+            $len >>= 7;
+            if ($len !== 0) {
+                $elem |= 0x80;
+            }
+            $bytes .= chr($elem);
+        } while ($len > 0);
+        return $bytes;
+    }
+
+    private function packU64LE(int $value): string
+    {
+        // Use 'P' format code for unsigned long long (64 bit, little endian byte order)
+        return pack('P', $value);
+    }
+
     public function getKeypairFromWallet($wallet): array
     {
-        $decryptedPrivateKey = \Illuminate\Support\Facades\Crypt::decryptString($wallet->private_key);
-        $privateKeyBytes = base64_decode($decryptedPrivateKey);
-
-        if (strlen($privateKeyBytes) !== 64) {
-            throw new Exception('Invalid private key length');
+        $encryptedPk = $wallet->meta['encrypted_pk'] ?? null;
+        if (!$encryptedPk) {
+            throw new \RuntimeException('Wallet private key not found');
         }
 
-        $publicKeyBytes = substr($privateKeyBytes, 32, 32);
-        $publicKey = $this->base58Encode($publicKeyBytes);
+        $privateKeyBase64 = \Illuminate\Support\Facades\Crypt::decryptString($encryptedPk);
+        $secretKey = base64_decode($privateKeyBase64, true);
+        
+        if ($secretKey === false || strlen($secretKey) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+            throw new \RuntimeException('Invalid private key format');
+        }
 
+        $publicKey = sodium_crypto_sign_publickey_from_secretkey($secretKey);
+        
         return [
             'public_key' => $publicKey,
-            'private_key_bytes' => $privateKeyBytes,
-            'public_key_bytes' => $publicKeyBytes,
-        ];
-    }
-
-    /**
-     * Get Associated Token Address (ATA) for a token
-     */
-    public function getAssociatedTokenAddress(string $owner, string $mint): string
-    {
-        // Associated Token Program ID
-        $associatedTokenProgramId = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
-
-        // Derive PDA for ATA
-        $seeds = [
-            $this->base58Decode($owner),
-            $this->base58Decode('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'), // Token Program ID
-            $this->base58Decode($mint),
-        ];
-
-        $pda = $this->findProgramAddress($seeds, $associatedTokenProgramId);
-        return $this->base58Encode($pda);
-    }
-
-    /**
-     * Get token decimals
-     */
-    public function getTokenDecimals(string $mint): int
-    {
-        $result = $this->rpcCall('getAccountInfo', [
-            $mint,
-            [
-                'encoding' => 'jsonParsed',
-                'commitment' => self::COMMITMENT_FINALIZED
-            ]
-        ]);
-
-        if (!isset($result['result']['value']['data']['parsed']['info']['decimals'])) {
-            throw new Exception('Failed to get token decimals');
-        }
-
-        return $result['result']['value']['data']['parsed']['info']['decimals'];
-    }
-
-    /**
-     * Find Program Derived Address (PDA)
-     */
-    protected function findProgramAddress(array $seeds, string $programId): string
-    {
-        $programIdBytes = $this->base58Decode($programId);
-        $nonce = 0;
-
-        while ($nonce < 256) {
-            $nonceBytes = pack('C', $nonce);
-            $hashInput = '';
-
-            foreach ($seeds as $seed) {
-                $hashInput .= $seed;
-            }
-            $hashInput .= $programIdBytes . $nonceBytes;
-
-            $hash = hash('sha256', $hashInput, true);
-
-            // Check if hash is valid public key (first bit is 0)
-            if (ord($hash[31]) < 128) {
-                return $hash;
-            }
-
-            $nonce++;
-        }
-
-        throw new Exception('Unable to find a valid program derived address');
-    }
-
-    /**
-     * Send SPL token transaction
-     */
-    public function sendSPLTransaction(array $params): string
-    {
-        foreach (['from', 'to', 'amount', 'token_mint', 'private_key'] as $field) {
-            if (!isset($params[$field])) {
-                throw new Exception("Missing required parameter: {$field}");
-            }
-        }
-
-        $fromAddress = $params['from'];
-        $toAddress = $params['to'];
-        $amount = $params['amount'];
-        $tokenMint = $params['token_mint'];
-        $privateKey = $params['private_key'];
-
-        $this->validateAddress($fromAddress);
-        $this->validateAddress($toAddress);
-        $this->validateAddress($tokenMint);
-
-        $decimals = $this->getTokenDecimals($tokenMint);
-        $amountInSmallestUnit = bcmul((string)$amount, bcpow('10', (string)$decimals, 0), 0);
-
-        $fromATA = $this->getAssociatedTokenAddress($fromAddress, $tokenMint);
-        $toATA = $this->getAssociatedTokenAddress($toAddress, $tokenMint);
-
-        Log::info('Initiating SPL token transaction', [
-            'network' => $this->network,
-            'from' => $fromAddress,
-            'to' => $toAddress,
-            'token_mint' => $tokenMint,
-            'amount' => $amount,
-            'decimals' => $decimals,
-            'amount_smallest' => $amountInSmallestUnit,
-            'from_ata' => $fromATA,
-            'to_ata' => $toATA,
-        ]);
-
-        try {
-            $recentBlockhash = $this->getRecentBlockhash();
-
-            $instructions = [];
-
-            // Check if destination ATA exists
-            if (!$this->accountExists($toATA)) {
-                // Add instruction to create ATA
-                $instructions[] = $this->createAssociatedTokenAccountInstruction($fromAddress, $toAddress, $tokenMint);
-            }
-
-            // Add transfer instruction
-            $instructions[] = $this->createTokenTransferInstruction($fromATA, $toATA, $fromAddress, $amountInSmallestUnit);
-
-            $transaction = [
-                'recentBlockhash' => $recentBlockhash,
-                'feePayer' => $fromAddress,
-                'instructions' => $instructions,
-            ];
-
-            $signedTransaction = $this->signTransaction($transaction, $privateKey);
-            $signature = $this->sendRawTransaction($signedTransaction);
-
-            Log::info('SPL token transaction sent successfully', [
-                'signature' => $signature,
-                'from' => $fromAddress,
-                'to' => $toAddress,
-                'token_mint' => $tokenMint,
-                'amount' => $amount,
-                'explorer_url' => $this->getTransactionUrl($signature),
-            ]);
-
-            return $signature;
-
-        } catch (Exception $e) {
-            Log::error('SPL token transaction failed', [
-                'error' => $e->getMessage(),
-                'from' => $fromAddress,
-                'to' => $toAddress,
-                'token_mint' => $tokenMint,
-                'amount' => $amount,
-                'trace' => $e->getTraceAsString(),
-            ]);
-            throw $e;
-        }
-    }
-
-    /**
-     * Check if account exists
-     */
-    protected function accountExists(string $address): bool
-    {
-        try {
-            $result = $this->rpcCall('getAccountInfo', [
-                $address,
-                ['commitment' => self::COMMITMENT_FINALIZED]
-            ]);
-
-            return isset($result['result']['value']) && $result['result']['value'] !== null;
-        } catch (Exception $e) {
-            return false;
-        }
-    }
-
-    /**
-     * Create Associated Token Account instruction
-     */
-    protected function createAssociatedTokenAccountInstruction(string $payer, string $owner, string $mint): array
-    {
-        $ata = $this->getAssociatedTokenAddress($owner, $mint);
-
-        return [
-            'programId' => 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
-            'keys' => [
-                ['pubkey' => $payer, 'isSigner' => true, 'isWritable' => true],
-                ['pubkey' => $ata, 'isSigner' => false, 'isWritable' => true],
-                ['pubkey' => $owner, 'isSigner' => false, 'isWritable' => false],
-                ['pubkey' => $mint, 'isSigner' => false, 'isWritable' => false],
-                ['pubkey' => '11111111111111111111111111111112', 'isSigner' => false, 'isWritable' => false], // System Program
-                ['pubkey' => 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'isSigner' => false, 'isWritable' => false], // Token Program
-                ['pubkey' => 'SysvarRent111111111111111111111111111111111', 'isSigner' => false, 'isWritable' => false], // Rent Sysvar
-            ],
-            'data' => base64_encode(''), // Empty data for create instruction
-        ];
-    }
-
-    /**
-     * Create Token Transfer instruction
-     */
-    protected function createTokenTransferInstruction(string $fromATA, string $toATA, string $owner, string $amount): array
-    {
-        // Transfer instruction: [12, amount as 64-bit little-endian]
-        $data = pack('C', 12); // Transfer instruction index
-        $data .= pack('P', $amount); // 64-bit amount
-        $data = base64_encode($data);
-
-        return [
-            'programId' => 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-            'keys' => [
-                ['pubkey' => $fromATA, 'isSigner' => false, 'isWritable' => true],
-                ['pubkey' => $toATA, 'isSigner' => false, 'isWritable' => true],
-                ['pubkey' => $owner, 'isSigner' => true, 'isWritable' => false],
-            ],
-            'data' => $data,
+            'private_key_bytes' => $secretKey,
+            'address' => $this->base58Encode($publicKey),
         ];
     }
 }

@@ -42,7 +42,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
         $this->currency = $currency;
         $this->network = $network;
         $this->memo = $memo;
-        
+
         $this->onQueue('withdrawals');
     }
 
@@ -66,7 +66,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
             if (empty($userWallet->meta['encrypted_pk'])) {
                 throw new \Exception('Wallet private key not found');
             }
-            
+
             try {
                 // Decrypt the private key
                 $privateKey = \Illuminate\Support\Facades\Crypt::decryptString($userWallet->meta['encrypted_pk']);
@@ -87,7 +87,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
 
             // Determine if it's Solana or EVM chain
             $isSolana = in_array($this->currency, ['SOL']) || $this->network === 'solana';
-            
+
             if ($isSolana) {
                 // Process Solana transaction
                 $txHash = $this->processSolanaWithdrawal($solanaService, $userWallet, $privateKey);
@@ -95,7 +95,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
                 // Process EVM transaction (Ethereum, BSC, etc.)
                 $txHash = $this->processEvmWithdrawal($ethereumService, $userWallet, $privateKey);
             }
-            
+
             // Update withdrawal status
             $this->withdrawal->update([
                 'status' => 'completed',
@@ -111,7 +111,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
 
             // Update user's balance
             $this->updateUserBalance();
-            
+
             // Log successful withdrawal
             Log::info('Withdrawal processed', [
                 'user_id' => $this->user->id,
@@ -122,17 +122,17 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
                 'tx_hash' => $txHash,
                 'blockchain' => $isSolana ? 'solana' : 'evm',
             ]);
-            
+
         } catch (\Exception $e) {
             // Update withdrawal status to failed
             $this->withdrawal->update([
                 'status' => 'failed',
                 'failure_reason' => $e->getMessage(),
             ]);
-            
+
             // Revert reserved balance
             $this->revertReservedBalance();
-            
+
             // Log the error
             Log::error('Withdrawal failed: ' . $e->getMessage(), [
                 'user_id' => $this->user->id,
@@ -142,7 +142,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
                 'destination' => $this->destination,
                 'trace' => $e->getTraceAsString(),
             ]);
-            
+
             // Re-throw to allow job to be retried
             throw $e;
         }
@@ -151,36 +151,58 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
     /**
      * Process Solana withdrawal
      */
-    protected function processSolanaWithdrawal(SolanaService $solanaService, $userWallet, $privateKey): string
-    {
-        Log::info('Processing Solana withdrawal', [
-            'from' => $userWallet->address,
-            'to' => $this->destination,
-            'amount' => $this->amount,
-        ]);
+    /**
+ */
+protected function processSolanaWithdrawal(SolanaService $solanaService, $userWallet, $privateKey): string
+{
+    Log::info('Processing Solana withdrawal', [
+        'from' => $userWallet->address,
+        'to' => $this->destination,
+        'amount' => $this->amount,
+    ]);
 
-        // Send transaction
-        $signature = $solanaService->sendTransaction([
-            'from' => $userWallet->address,
-            'to' => $this->destination,
-            'amount' => $this->amount,
-            'private_key' => $privateKey,
-        ]);
+    // Amount provided to this job is in SOL units. Convert to lamports.
+    $lamports = (int)round($this->amount * 1000000000);
 
-        // Wait for confirmation
-        try {
-            $solanaService->waitForConfirmation($signature, 30, 2);
-            Log::info('Solana transaction confirmed', ['signature' => $signature]);
-        } catch (\Exception $e) {
-            Log::warning('Could not confirm Solana transaction', [
-                'signature' => $signature,
-                'error' => $e->getMessage(),
-            ]);
-            // Continue anyway - transaction was sent
-        }
-
-        return $signature;
+    // On-chain balance check (amount + estimated fee)
+    $onChainLamports = $solanaService->getBalance($userWallet->address);
+    $estimatedFeeLamports = $solanaService->estimateFee([]);
+    if ($onChainLamports < ($lamports + $estimatedFeeLamports)) {
+        $haveSol = $solanaService->convertFromLamports($onChainLamports);
+        $needSol = $solanaService->convertFromLamports($lamports + $estimatedFeeLamports);
+        throw new \Exception('Insufficient blockchain balance for withdrawal. Have ' . $haveSol . ' SOL, need at least ' . $needSol . ' SOL including fees.');
     }
+
+    // ✅ FIXED: Debug FIRST, BEFORE sendTransaction
+    $solanaService->debugTransaction(
+        $userWallet->address, 
+        $this->destination, 
+        $lamports, 
+        $privateKey
+    );
+
+    // Send transaction
+    $signature = $solanaService->sendTransaction([
+        'from' => $userWallet->address,
+        'to' => $this->destination,
+        'amount' => $lamports,
+        'private_key' => $privateKey,
+        'memo' => $this->memo,
+    ]);
+
+    // Wait for confirmation
+    try {
+        $solanaService->waitForConfirmation($signature, 30, 2);
+        Log::info('Solana transaction confirmed', ['signature' => $signature]);
+    } catch (\Exception $e) {
+        Log::warning('Could not confirm Solana transaction', [
+            'signature' => $signature,
+            'error' => $e->getMessage(),
+        ]);
+    }
+
+    return $signature;
+}
 
     /**
      * Process EVM (Ethereum, BSC, etc.) withdrawal
@@ -189,7 +211,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
     {
         // Convert amount to the smallest unit (wei for ETH, etc.)
         $amountInWei = $this->convertToSmallestUnit($this->amount, $this->currency);
-        
+
         Log::info('Processing EVM withdrawal', [
             'from' => $userWallet->address,
             'to' => $this->destination,
@@ -256,7 +278,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
             $balance->save();
         }
     }
-    
+
     /**
      * Get wallet balance
      */
@@ -266,17 +288,17 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
         $balance = WalletBalances::where('user_id', $this->user->id)
             ->where('currency', $currency)
             ->first();
-            
+
         if (!$balance) {
             return 0;
         }
-        
+
         // For cryptocurrencies, use token_balance, otherwise use balance_minor
-        return in_array($currency, ['ETH', 'USDT', 'USDC', 'BTC', 'SOL']) 
-            ? (float)$balance->token_balance 
+        return in_array($currency, ['ETH', 'USDT', 'USDC', 'BTC', 'SOL'])
+            ? (float)$balance->token_balance
             : (float)$balance->balance_minor;
     }
-    
+
     /**
      * Convert amount to the smallest unit (e.g., wei for ETH, lamports for SOL)
      */
@@ -286,7 +308,7 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
         if ($currency === 'SOL') {
             return bcmul($amount, '1000000000', 0); // 1 SOL = 1 billion lamports
         }
-        
+
         // For ETH, convert to wei (1 ETH = 10^18 wei)
         if ($currency === 'ETH') {
             $wei = Utils::toWei((string)$amount, 'ether');
@@ -296,13 +318,13 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
             }
             return (string)$wei;
         }
-        
+
         // For tokens, we assume they use 18 decimals by default
         // Adjust if your tokens use different decimals
         $amountInWei = bcmul($amount, bcpow('10', '18', 0), 0);
         return (string)$amountInWei;
     }
-    
+
     /**
      * Handle a job failure.
      */
@@ -310,13 +332,13 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
     {
         // Revert reserved balance
         $this->revertReservedBalance();
-        
+
         // Update withdrawal status
         $this->withdrawal->update([
             'status' => 'failed',
             'failure_reason' => $exception->getMessage(),
         ]);
-        
+
         Log::error('Withdrawal job failed permanently', [
             'user_id' => $this->user->id,
             'withdrawal_id' => $this->withdrawal->id,

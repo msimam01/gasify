@@ -4,10 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class PricingRules extends Model
+class MasterWallets extends Model
 {
-    //
-}class PricingRules extends Model
-{
-    //
+    // Define table name if it doesn't follow Laravel's convention
+    // protected $table = 'master_wallets';
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Head, useForm, Link, router } from '@inertiajs/react';
 import { route } from 'ziggy-js';
 import AppLayout from '@/layouts/app-layout';
@@ -8,8 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { IconArrowLeft, IconWallet, IconBuildingBank, IconAlertCircle } from '@tabler/icons-react';
+import { IconArrowLeft, IconWallet, IconBuildingBank, IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Loader2 } from 'lucide-react';
+import axios from 'axios';
 
 interface WalletBalance {
   currency: string;
@@ -29,8 +32,15 @@ interface NetworkInfo {
 export default function WalletWithdraw({ balances }: { balances: WalletBalance[] }) {
   const [selectedMethod, setSelectedMethod] = useState('bank');
   const [selectedCurrency, setSelectedCurrency] = useState(balances.length > 0 ? balances[0].currency : 'NGN');
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
+  const [transactionId, setTransactionId] = useState<number | null>(null);
+  const [transactionStatus, setTransactionStatus] = useState<string>('pending');
+  const [isPolling, setIsPolling] = useState(false);
+  const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [statusMessage, setStatusMessage] = useState<string>('');
 
-  const { data, setData, post, processing, errors } = useForm({
+  const { data, setData, post, processing, errors, reset } = useForm({
     amount: '',
     currency: selectedCurrency,
     destination: '',
@@ -96,10 +106,81 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
     }
   };
 
+  // Poll for transaction status
+  useEffect(() => {
+    if (!transactionId || !isPolling) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await axios.get(`/api/withdrawal-status/${transactionId}`);
+        const data = response.data;
+        
+        setTransactionStatus(data.status);
+        setStatusMessage(data.message || '');
+        
+        if (data.explorer_url) {
+          setExplorerUrl(data.explorer_url);
+        }
+        
+        if (data.status === 'failed') {
+          setErrorMessage(data.failure_reason || 'Withdrawal failed. Please try again.');
+        }
+        
+        // Stop polling if completed or failed
+        if (data.status === 'completed' || data.status === 'failed') {
+          setIsPolling(false);
+          clearInterval(pollInterval);
+        }
+      } catch (error) {
+        console.error('Failed to fetch transaction status:', error);
+        // Don't stop polling on network errors, keep trying
+      }
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [transactionId, isPolling]);
+
   // Handle form submit
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    post('/wallet/withdraw/process');
+    
+    try {
+      const response = await axios.post('/wallet/withdraw/process', data, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      const responseData = response.data;
+      
+      // Handle structured response
+      if (responseData.transaction_id) {
+        setTransactionId(responseData.transaction_id);
+        setStatusMessage(responseData.message || 'Withdrawal initiated successfully. Transaction is being processed.');
+        setTransactionStatus(responseData.status || 'processing');
+        setExplorerUrl(responseData.explorer_url || null);
+        setErrorMessage(responseData.error || '');
+        setShowSuccessDialog(true);
+        setIsPolling(responseData.status === 'processing');
+        reset();
+      }
+    } catch (error: any) {
+      console.error('Withdrawal submission failed:', error);
+      
+      // Handle error response
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        setErrorMessage(errorData.error || 'Failed to process withdrawal. Please try again.');
+        
+        if (errorData.transaction_id) {
+          setTransactionId(errorData.transaction_id);
+          setTransactionStatus('failed');
+          setShowSuccessDialog(true);
+          setIsPolling(false);
+        }
+      }
+    }
   };
 
   // Handle quick amount select
@@ -506,7 +587,14 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                       className="w-full sm:w-auto"
                       disabled={processing || !data.amount || (selectedMethod === 'crypto' && !data.wallet_address) || (!isSolana && selectedMethod === 'crypto' && !data.network)}
                     >
-                      {processing ? 'Processing...' : 'Confirm Withdrawal'}
+                      {processing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Processing...
+                        </>
+                      ) : (
+                        'Confirm Withdrawal'
+                      )}
                     </Button>
                   </div>
                 </form>
@@ -515,6 +603,79 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
           </div>
         </div>
       </div>
+
+      {/* Success Dialog */}
+      <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
+              {transactionStatus === 'completed' ? (
+                <IconCheck className="h-6 w-6 text-green-600" />
+              ) : transactionStatus === 'failed' ? (
+                <IconAlertCircle className="h-6 w-6 text-red-600" />
+              ) : (
+                <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+              )}
+            </div>
+            <DialogTitle className="text-center">
+              {transactionStatus === 'completed'
+                ? 'Withdrawal Successful!'
+                : transactionStatus === 'failed'
+                ? 'Withdrawal Failed'
+                : 'Processing Withdrawal'}
+            </DialogTitle>
+            <DialogDescription className="text-center">
+              {transactionStatus === 'completed' ? (
+                <>
+                  {statusMessage || 'Your withdrawal has been completed successfully!'}
+                  {explorerUrl && (
+                    <div className="mt-2 text-sm text-muted-foreground">
+                      Transaction ID: #{transactionId}
+                    </div>
+                  )}
+                </>
+              ) : transactionStatus === 'failed' ? (
+                <>
+                  <div className="text-red-600 font-medium">
+                    {errorMessage || 'Your withdrawal could not be processed. Please try again.'}
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Transaction ID: #{transactionId}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {statusMessage || 'Your withdrawal is being processed. This may take a few moments.'}
+                  <div className="mt-4 text-sm text-muted-foreground">
+                    Transaction ID: #{transactionId}
+                  </div>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {transactionStatus === 'completed' && explorerUrl && (
+              <Button
+                onClick={() => {
+                  window.open(explorerUrl, '_blank');
+                }}
+                variant="outline"
+              >
+                View on Blockchain Explorer
+              </Button>
+            )}
+            <Button
+              onClick={() => {
+                setShowSuccessDialog(false);
+                setIsPolling(false);
+                router.visit(route('wallet'));
+              }}
+            >
+              {transactionStatus === 'completed' ? 'Back to Wallet' : 'Close'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }

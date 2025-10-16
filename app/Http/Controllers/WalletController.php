@@ -52,19 +52,54 @@ class WalletController extends Controller
                 ];
             });
 
-        // Get recent transactions
+        // Get recent transactions (limit to 5)
         $recentTransactions = Transactions::where('user_id', $user->id)
             ->orderBy('created_at', 'desc')
-            ->limit(10)
+            ->limit(5)
             ->get()
             ->map(function ($transaction) {
+                // Determine chain name based on currency
+                $chainName = null;
+                $chainLogo = null;
+                
+                if (in_array($transaction->currency, ['SOL'])) {
+                    $chainName = 'Solana';
+                    $chainLogo = '/solana-logo.svg';
+                } elseif (in_array($transaction->currency, ['ETH', 'USDT', 'USDC'])) {
+                    $chainName = 'Ethereum';
+                    $chainLogo = '/ethereum-logo.svg';
+                } elseif (in_array($transaction->currency, ['BTC'])) {
+                    $chainName = 'Bitcoin';
+                    $chainLogo = '/bitcoin-logo.svg';
+                } elseif (in_array($transaction->currency, ['NGN', 'USD'])) {
+                    $chainName = 'Fiat';
+                    $chainLogo = null;
+                }
+                
+                // Determine amount based on currency type
+                $amount = 0;
+                if (in_array($transaction->currency, ['NGN', 'USD'])) {
+                    // Fiat currencies use amount_minor
+                    $amount = $transaction->amount_minor ? $transaction->amount_minor / 100 : 0;
+                } else {
+                    // Crypto currencies use amount_token
+                    $amount = $transaction->amount_token ?? 0;
+                }
+                
                 return [
                     'id' => $transaction->id,
                     'type' => $transaction->type,
                     'currency' => $transaction->currency,
-                    'amount' => $transaction->amount_minor ? $transaction->amount_minor / 100 : $transaction->amount_token,
+                    'amount' => $amount,
                     'reference' => $transaction->reference,
                     'created_at' => $transaction->created_at->format('M d, Y H:i'),
+                    'date' => $transaction->created_at->format('M d, Y'),
+                    'time' => $transaction->created_at->format('H:i'),
+                    'status' => $transaction->status ?? 'completed',
+                    'chain_name' => $chainName,
+                    'chain_logo' => $chainLogo,
+                    'explorer_url' => $transaction->explorer_url ?? null,
+                    'tx_hash' => $transaction->tx_hash ?? null,
                     'meta' => $transaction->meta,
                 ];
             });
@@ -386,6 +421,17 @@ public function withdraw()
         return back()->withErrors(['amount' => 'Insufficient balance']);
     }
 
+    // Reserve balance for crypto withdrawals BEFORE creating transaction
+    if ($validated['method'] === 'crypto') {
+        $balanceRecord = WalletBalances::where('user_id', $user->id)
+            ->where('currency', $validated['currency'])->firstOrFail();
+        if ($balanceRecord->available_token < $validated['amount']) {
+            return back()->withErrors(['amount' => 'Insufficient available balance']);
+        }
+        $balanceRecord->reserved_token += $validated['amount'];
+        $balanceRecord->save();
+    }
+
     // Create withdrawal record
     $withdrawal = Transactions::create([
         'user_id' => $user->id,
@@ -421,7 +467,7 @@ public function withdraw()
                 'network' => ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
             ]);
 
-            $message = 'Crypto withdrawal submitted. It may take a few minutes to process.';
+            $message = 'Withdrawal initiated successfully. Transaction is being processed.';
         } else {
             // For bank withdrawals, mark as pending admin approval
             $withdrawal->update(['status' => 'processing']);
@@ -429,21 +475,46 @@ public function withdraw()
             $message = 'Bank withdrawal request submitted. It will be processed within 1-2 business days.';
         }
 
+        if ($request->wantsJson()) {
+            return response()->json([
+                'status' => 'processing',
+                'message' => $message,
+                'transaction_id' => $withdrawal->id,
+                'explorer_url' => null,
+                'error' => null
+            ]);
+        }
+
         return back()->with('success', $message);
 
     } catch (\Exception $e) {
+        // Map exception to human-readable error
+        $humanReadableError = $this->mapExceptionToUserMessage($e);
+        
         $withdrawal->update([
             'status' => 'failed',
-            'failure_reason' => $e->getMessage()
+            'failure_reason' => $humanReadableError
         ]);
 
-        Log::error('Withdrawal failed', [
+        Log::error('Withdrawal controller exception', [
             'user_id' => $user->id,
-            'error' => $e->getMessage(),
+            'withdrawal_id' => $withdrawal->id,
+            'human_readable_error' => $humanReadableError,
+            'raw_error' => $e->getMessage(),
             'trace' => $e->getTraceAsString(),
         ]);
 
-        return back()->withErrors(['withdrawal' => 'Failed to process withdrawal. Please try again.']);
+        if ($request->wantsJson()) {
+            return response()->json([
+                'status' => 'failed',
+                'message' => null,
+                'transaction_id' => $withdrawal->id,
+                'explorer_url' => null,
+                'error' => $humanReadableError
+            ], 422);
+        }
+
+        return back()->withErrors(['withdrawal' => $humanReadableError]);
     }
 }
 
@@ -573,5 +644,80 @@ public function withdraw()
         }
 
         return $json['result'] ?? null;
+    }
+
+    /**
+     * Map exception to user-friendly error message
+     */
+    private function mapExceptionToUserMessage(\Throwable $exception): string
+    {
+        $message = $exception->getMessage();
+        
+        // Network/RPC errors
+        if (stripos($message, 'cURL') !== false || stripos($message, 'timeout') !== false || stripos($message, 'timed out') !== false) {
+            return 'Network temporarily unavailable. Please try again in a few moments.';
+        }
+        
+        if (stripos($message, 'RPC') !== false || stripos($message, 'connection') !== false) {
+            return 'Unable to connect to blockchain network. Please try again later.';
+        }
+        
+        // Balance errors
+        if (stripos($message, 'insufficient') !== false && (stripos($message, 'balance') !== false || stripos($message, 'funds') !== false)) {
+            return 'Insufficient blockchain balance to complete this withdrawal.';
+        }
+        
+        // Wallet/key errors
+        if (stripos($message, 'decrypt') !== false || stripos($message, 'private key') !== false) {
+            return 'Wallet configuration error. Please contact support.';
+        }
+        
+        // Address validation errors
+        if (stripos($message, 'invalid') !== false && stripos($message, 'address') !== false) {
+            return 'Invalid destination address. Please check and try again.';
+        }
+        
+        // Default: return a generic error message
+        return 'Unable to process withdrawal at this time. Please try again or contact support if the issue persists.';
+    }
+
+    /**
+     * Get withdrawal status (API endpoint for polling)
+     */
+    public function getWithdrawalStatus(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $withdrawal = Transactions::where('id', $id)
+            ->where('user_id', $user->id)
+            ->where('type', 'withdrawal')
+            ->firstOrFail();
+        
+        $response = [
+            'status' => $withdrawal->status,
+            'message' => $this->getStatusMessage($withdrawal),
+            'explorer_url' => $withdrawal->explorer_url ?? null,
+            'failure_reason' => $withdrawal->failure_reason ?? null,
+            'amount' => $withdrawal->amount,
+            'currency' => $withdrawal->currency,
+            'created_at' => $withdrawal->created_at->toIso8601String(),
+            'completed_at' => $withdrawal->completed_at ? $withdrawal->completed_at->toIso8601String() : null,
+        ];
+        
+        return response()->json($response);
+    }
+
+    /**
+     * Get user-friendly status message for withdrawal
+     */
+    private function getStatusMessage(Transactions $withdrawal): string
+    {
+        return match($withdrawal->status) {
+            'pending' => 'Your withdrawal is queued and will be processed shortly.',
+            'processing' => 'Your withdrawal is being processed on the blockchain.',
+            'completed' => 'Withdrawal successful! Your transaction has been confirmed.',
+            'failed' => $withdrawal->failure_reason ?? 'Withdrawal failed. Please try again.',
+            default => 'Withdrawal status unknown.',
+        };
     }
 }

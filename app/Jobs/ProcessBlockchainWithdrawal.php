@@ -8,6 +8,9 @@ use App\Models\UserWallets;
 use App\Models\Chains;
 use App\Services\EthereumService;
 use App\Services\SolanaService;
+use App\Events\WithdrawalStatusUpdated;
+use App\Notifications\WithdrawalCompleted;
+use App\Notifications\WithdrawalFailed;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -96,10 +99,14 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
                 $txHash = $this->processEvmWithdrawal($ethereumService, $userWallet, $privateKey);
             }
 
-            // Update withdrawal status
+            // Build explorer URL
+            $explorerUrl = $this->getExplorerUrl($txHash, $isSolana);
+            
+            // Update withdrawal status to completed
             $this->withdrawal->update([
                 'status' => 'completed',
                 'tx_hash' => $txHash,
+                'explorer_url' => $explorerUrl,
                 'completed_at' => now(),
                 'meta' => array_merge($this->withdrawal->meta ?? [], [
                     'from_wallet' => $userWallet->address,
@@ -111,6 +118,17 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
 
             // Update user's balance
             $this->updateUserBalance();
+
+            // Broadcast event for real-time updates
+            event(new WithdrawalStatusUpdated(
+                $this->withdrawal,
+                'completed',
+                'Withdrawal successful! View on Explorer',
+                $explorerUrl
+            ));
+
+            // Send notification to user
+            $this->user->notify(new WithdrawalCompleted($this->withdrawal, $explorerUrl));
 
             // Log successful withdrawal
             Log::info('Withdrawal processed', [
@@ -124,22 +142,39 @@ class ProcessBlockchainWithdrawal implements ShouldQueue
             ]);
 
         } catch (\Exception $e) {
+            // Map to human-readable error message
+            $humanReadableError = $this->getHumanReadableError($e);
+            
             // Update withdrawal status to failed
             $this->withdrawal->update([
                 'status' => 'failed',
-                'failure_reason' => $e->getMessage(),
+                'failure_reason' => $humanReadableError,
             ]);
 
             // Revert reserved balance
             $this->revertReservedBalance();
 
-            // Log the error
+            // Broadcast event for real-time updates
+            event(new WithdrawalStatusUpdated(
+                $this->withdrawal,
+                'failed',
+                'Withdrawal failed',
+                null,
+                $humanReadableError
+            ));
+
+            // Send notification to user
+            $this->user->notify(new WithdrawalFailed($this->withdrawal, $humanReadableError));
+
+            // Log the error with full details
             Log::error('Withdrawal failed: ' . $e->getMessage(), [
                 'user_id' => $this->user->id,
                 'wallet_id' => $userWallet->id ?? null,
                 'amount' => $this->amount,
                 'currency' => $this->currency,
                 'destination' => $this->destination,
+                'human_readable_error' => $humanReadableError,
+                'raw_error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
 
@@ -239,19 +274,9 @@ protected function processSolanaWithdrawal(SolanaService $solanaService, $userWa
     protected function updateUserBalance()
     {
         $balance = WalletBalances::where('user_id', $this->user->id)
-            ->where('currency', $this->currency)
-            ->first();
-
-        if ($balance) {
-            // Deduct from reserved balance
-            if (in_array($this->currency, ['ETH', 'USDT', 'USDC', 'BTC', 'SOL'])) {
-                // For crypto, use token_balance
-                $balance->token_balance = max(0, $balance->token_balance - $this->amount);
-            } else {
-                // For fiat, use balance_minor
-                $amountMinor = $this->amount * 100;
-                $balance->reserved_minor = max(0, $balance->reserved_minor - $amountMinor);
-            }
+            ->where('currency', $this->currency)->first();
+        if ($balance && in_array($this->currency, ['ETH','USDT','USDC','BTC','SOL'])) {
+            $balance->reserved_token = max(0, $balance->reserved_token - $this->amount);
             $balance->save();
         }
     }
@@ -262,19 +287,10 @@ protected function processSolanaWithdrawal(SolanaService $solanaService, $userWa
     protected function revertReservedBalance()
     {
         $balance = WalletBalances::where('user_id', $this->user->id)
-            ->where('currency', $this->currency)
-            ->first();
-
-        if ($balance) {
-            if (in_array($this->currency, ['ETH', 'USDT', 'USDC', 'BTC', 'SOL'])) {
-                // For crypto, add back to token_balance
-                $balance->token_balance += $this->amount;
-            } else {
-                // For fiat, move from reserved back to balance
-                $amountMinor = $this->amount * 100;
-                $balance->balance_minor += $amountMinor;
-                $balance->reserved_minor = max(0, $balance->reserved_minor - $amountMinor);
-            }
+            ->where('currency', $this->currency)->first();
+        if ($balance && in_array($this->currency, ['ETH','USDT','USDC','BTC','SOL'])) {
+            $balance->reserved_token = max(0, $balance->reserved_token - $this->amount);
+            $balance->token_balance += $this->amount;
             $balance->save();
         }
     }
@@ -333,16 +349,112 @@ protected function processSolanaWithdrawal(SolanaService $solanaService, $userWa
         // Revert reserved balance
         $this->revertReservedBalance();
 
+        // Map to human-readable error
+        $humanReadableError = $this->getHumanReadableError($exception);
+
         // Update withdrawal status
         $this->withdrawal->update([
             'status' => 'failed',
-            'failure_reason' => $exception->getMessage(),
+            'failure_reason' => $humanReadableError,
         ]);
+
+        // Broadcast event for real-time updates
+        event(new WithdrawalStatusUpdated(
+            $this->withdrawal,
+            'failed',
+            'Withdrawal failed',
+            null,
+            $humanReadableError
+        ));
+
+        // Send notification to user
+        $this->user->notify(new WithdrawalFailed($this->withdrawal, $humanReadableError));
 
         Log::error('Withdrawal job failed permanently', [
             'user_id' => $this->user->id,
             'withdrawal_id' => $this->withdrawal->id,
-            'error' => $exception->getMessage(),
+            'human_readable_error' => $humanReadableError,
+            'raw_error' => $exception->getMessage(),
+            'trace' => $exception->getTraceAsString(),
         ]);
+    }
+
+    /**
+     * Get explorer URL for transaction
+     */
+    protected function getExplorerUrl(string $txHash, bool $isSolana): string
+    {
+        if ($isSolana) {
+            $network = config('services.solana.network', 'devnet');
+            $cluster = $network === 'mainnet-beta' ? '' : "?cluster={$network}";
+            return "https://explorer.solana.com/tx/{$txHash}{$cluster}";
+        }
+        
+        // For EVM chains, determine network
+        $network = $this->network ?? 'ethereum';
+        
+        return match($network) {
+            'ethereum' => "https://etherscan.io/tx/{$txHash}",
+            'binance' => "https://bscscan.com/tx/{$txHash}",
+            'arbitrum' => "https://arbiscan.io/tx/{$txHash}",
+            'optimism' => "https://optimistic.etherscan.io/tx/{$txHash}",
+            default => "https://etherscan.io/tx/{$txHash}",
+        };
+    }
+
+    /**
+     * Map exception to human-readable error message
+     */
+    protected function getHumanReadableError(\Throwable $exception): string
+    {
+        $message = $exception->getMessage();
+        
+        // Solana-specific error mapping
+        if (stripos($message, 'insufficient') !== false && stripos($message, 'funds') !== false) {
+            return 'Insufficient funds on the blockchain. Please ensure your wallet has enough balance to cover the transaction and network fees.';
+        }
+        
+        if (stripos($message, 'InsufficientFundsForFee') !== false) {
+            return 'Not enough SOL to pay for transaction fees. Please add more SOL to your wallet.';
+        }
+        
+        if (stripos($message, 'invalid') !== false && stripos($message, 'address') !== false) {
+            return 'Invalid destination address. Please check the address and try again.';
+        }
+        
+        if (stripos($message, 'blockhash') !== false && stripos($message, 'not found') !== false) {
+            return 'Transaction expired. Please try again.';
+        }
+        
+        if (stripos($message, 'timeout') !== false || stripos($message, 'timed out') !== false) {
+            return 'Transaction confirmation timed out. The transaction may still be processing on the blockchain.';
+        }
+        
+        if (stripos($message, 'RPC') !== false || stripos($message, 'network') !== false) {
+            return 'Network connection error. Please try again in a few moments.';
+        }
+        
+        // EVM-specific error mapping
+        if (stripos($message, 'gas') !== false) {
+            return 'Insufficient gas for transaction. Please try again with a higher gas limit.';
+        }
+        
+        if (stripos($message, 'nonce') !== false) {
+            return 'Transaction nonce error. Please try again.';
+        }
+        
+        // Generic errors
+        if (stripos($message, 'private key') !== false) {
+            return 'Wallet configuration error. Please contact support.';
+        }
+        
+        // Default: return a sanitized version of the original message
+        // Remove any sensitive information
+        $sanitized = preg_replace('/0x[a-fA-F0-9]{64}/', '[REDACTED]', $message);
+        $sanitized = preg_replace('/[A-Za-z0-9+\/]{40,}/', '[REDACTED]', $sanitized);
+        
+        return strlen($sanitized) > 200 
+            ? substr($sanitized, 0, 200) . '...' 
+            : $sanitized;
     }
 }

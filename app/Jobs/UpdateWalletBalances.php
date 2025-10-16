@@ -50,14 +50,14 @@ class UpdateWalletBalances implements ShouldQueue
                     'balance' => $balance,
                 ]);
 
-                // update or create WalletBalances row
+                // update or create WalletBalances row (DON'T touch reserved_token!)
                 WalletBalances::updateOrCreate(
                     [
                         'user_id' => $wallet->user_id,
                         'currency' => $wallet->chain->symbol, // e.g. ETH, SOL
                     ],
                     [
-                        'token_balance' => $balance,
+                        'token_balance' => $balance, // ONLY update token_balance
                     ]
                 );
             } catch (\Throwable $e) {

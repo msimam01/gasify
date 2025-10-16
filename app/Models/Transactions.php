@@ -17,6 +17,11 @@ class Transactions extends Model
         'balance_after_minor',
         'reference',
         'meta',
+        'status',
+        'tx_hash',
+        'explorer_url',
+        'failure_reason',
+        'completed_at',
     ];
 
     protected $casts = [
@@ -25,6 +30,7 @@ class Transactions extends Model
         'amount_token' => 'decimal:18',
         'balance_before_minor' => 'integer',
         'balance_after_minor' => 'integer',
+        'completed_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

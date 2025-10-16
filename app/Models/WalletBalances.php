@@ -13,6 +13,7 @@ class WalletBalances extends Model
         'balance_minor',
         'reserved_minor',
         'token_balance',
+        'reserved_token',
         'meta',
     ];
 
@@ -21,6 +22,7 @@ class WalletBalances extends Model
         'balance_minor' => 'integer',
         'reserved_minor' => 'integer',
         'token_balance' => 'decimal:18',
+        'reserved_token' => 'decimal:18',
     ];
 
     public function user(): BelongsTo
@@ -37,5 +39,10 @@ class WalletBalances extends Model
     public function getAvailableBalanceAttribute(): float
     {
         return ($this->balance_minor - $this->reserved_minor) / 100;
+    }
+
+    public function getAvailableTokenAttribute()
+    {
+        return $this->token_balance - $this->reserved_token;
     }
 }

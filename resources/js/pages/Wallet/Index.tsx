@@ -41,6 +41,13 @@ interface Transaction {
   amount: number;
   reference: string;
   created_at: string;
+  date: string;
+  time: string;
+  status: string;
+  chain_name: string | null;
+  chain_logo: string | null;
+  explorer_url: string | null;
+  tx_hash: string | null;
   meta: any;
 }
 
@@ -307,32 +314,59 @@ export default function WalletIndex({ balances, wallets, recentTransactions }: P
                       <p className="text-sm">Your transaction history will appear here</p>
                     </div>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       {recentTransactions.map((transaction) => (
                         <div
                           key={transaction.id}
-                          className="flex items-center justify-between p-3 rounded-lg border"
+                          className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors"
                         >
-                          <div className="flex items-center space-x-3 min-w-0">
-                            {getTransactionIcon(transaction.type)}
-                            <div className="min-w-0">
-                              <div className="font-medium capitalize truncate">
-                                {transaction.type.replace('_', ' ')}
-                              </div>
-                              <div className="text-sm text-muted-foreground">
-                                {transaction.created_at}
-                              </div>
-                              {transaction.reference && (
-                                <div className="text-xs text-muted-foreground truncate max-w-xs">
-                                  Ref: {transaction.reference}
+                          <div className="flex items-center space-x-3 min-w-0 flex-1">
+                            <div className="flex-shrink-0">
+                              {getTransactionIcon(transaction.type)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <div className="font-medium capitalize">
+                                  {transaction.type.replace('_', ' ')}
                                 </div>
+                                {transaction.chain_name && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    {transaction.chain_name}
+                                  </Badge>
+                                )}
+                                {transaction.status && transaction.status !== 'completed' && (
+                                  <Badge 
+                                    variant={transaction.status === 'failed' ? 'destructive' : 'default'} 
+                                    className="text-xs"
+                                  >
+                                    {transaction.status}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <span>{transaction.date}</span>
+                                <span>•</span>
+                                <span>{transaction.time}</span>
+                              </div>
+                              {transaction.explorer_url && (
+                                <a 
+                                  href={transaction.explorer_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-blue-600 hover:underline mt-1 inline-block"
+                                >
+                                  View on Explorer →
+                                </a>
                               )}
                             </div>
                           </div>
-                          <div className="flex flex-col items-end flex-shrink-0">
-                            <div className={`font-medium ${getTransactionColor(transaction.type)}`}>
+                          <div className="flex flex-col items-end flex-shrink-0 ml-4">
+                            <div className={`font-semibold text-lg ${getTransactionColor(transaction.type)}`}>
                               {transaction.type === 'withdrawal' ? '-' : '+'}
-                              {formatCurrency(transaction.amount, transaction.currency)}
+                              {transaction.amount.toLocaleString(undefined, {
+                                minimumFractionDigits: transaction.currency === 'NGN' || transaction.currency === 'USD' ? 2 : 4,
+                                maximumFractionDigits: transaction.currency === 'NGN' || transaction.currency === 'USD' ? 2 : 8
+                              })}
                             </div>
                             <Badge variant="outline" className="text-xs mt-1">
                               {transaction.currency}

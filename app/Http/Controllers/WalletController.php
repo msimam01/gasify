@@ -134,185 +134,335 @@ class WalletController extends Controller
         ]);
     }
 
-public function processTopup(Request $request)
-{
-    $request->validate([
-        'amount' => 'required|numeric|min:100',
-        'currency' => 'required|in:NGN,USD',
-        'payment_method' => 'required|in:opay,paystack,flutterwave',
-    ]);
+    public function processTopup(Request $request)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:100',
+            'currency' => 'required|in:NGN,USD',
+            'payment_method' => 'required|in:opay,paystack,flutterwave',
+        ]);
 
-    $user = Auth::user();
-    $amountMinor = $request->amount * 100;
+        $user = Auth::user();
+        $amountMinor = $request->amount * 100;
 
-    // 1. Calculate fees (using fiat "chain" rules)
-    $pricing = \App\Models\PricingRules::whereHas('chain', fn($q) =>
-        $q->where('slug', 'fiat')) // you can define a pseudo-chain for fiat
-        ->first();
+        // 1. Calculate fees (using fiat "chain" rules)
+        $pricing = \App\Models\PricingRules::whereHas('chain', fn($q) =>
+            $q->where('slug', 'fiat')) // you can define a pseudo-chain for fiat
+            ->first();
 
-    $fee = ($pricing->percent_fee * $amountMinor) + $pricing->flat_fee_minor;
-    $netAmount = $amountMinor - $fee;
+        $fee = ($pricing->percent_fee * $amountMinor) + $pricing->flat_fee_minor;
+        $netAmount = $amountMinor - $fee;
 
-    // 2. Update balance
-    $balance = WalletBalances::firstOrCreate(
-        ['user_id' => $user->id, 'currency' => $request->currency],
-        ['balance_minor' => 0, 'reserved_minor' => 0]
-    );
+        // 2. Update balance
+        $balance = WalletBalances::firstOrCreate(
+            ['user_id' => $user->id, 'currency' => $request->currency],
+            ['balance_minor' => 0, 'reserved_minor' => 0]
+        );
 
-    $balanceBefore = $balance->balance_minor;
-    $balance->balance_minor += $netAmount;
-    $balance->save();
+        $balanceBefore = $balance->balance_minor;
+        $balance->balance_minor += $netAmount;
+        $balance->save();
 
-    // 3. Record deposit
-    $deposit = \App\Models\Deposits::create([
-        'user_id' => $user->id,
-        'provider' => $request->payment_method,
-        'amount_minor' => $amountMinor,
-        'currency' => $request->currency,
-        'status' => 'completed',
-        'meta' => ['fee' => $fee],
-    ]);
+        // 3. Record deposit
+        $deposit = \App\Models\Deposits::create([
+            'user_id' => $user->id,
+            'provider' => $request->payment_method,
+            'amount_minor' => $amountMinor,
+            'currency' => $request->currency,
+            'status' => 'completed',
+            'meta' => ['fee' => $fee],
+        ]);
 
-    // 4. Record transactions
-    Transactions::create([
-        'user_id' => $user->id,
-        'type' => 'deposit',
-        'currency' => $request->currency,
-        'amount_minor' => $netAmount,
-        'balance_before_minor' => $balanceBefore,
-        'balance_after_minor' => $balance->balance_minor,
-        'reference' => $deposit->id,
-        'meta' => ['payment_method' => $request->payment_method],
-    ]);
-
-    // Separate fee transaction
-    if ($fee > 0) {
+        // 4. Record transactions
         Transactions::create([
             'user_id' => $user->id,
-            'type' => 'fee',
+            'type' => 'deposit',
             'currency' => $request->currency,
-            'amount_minor' => $fee,
+            'amount_minor' => $netAmount,
             'balance_before_minor' => $balanceBefore,
             'balance_after_minor' => $balance->balance_minor,
             'reference' => $deposit->id,
-            'meta' => ['context' => 'deposit'],
+            'meta' => ['payment_method' => $request->payment_method],
         ]);
-    }
 
-    return redirect()->route('wallet')->with('success', 'Wallet topped up successfully!');
-}
+        // Separate fee transaction
+        if ($fee > 0) {
+            Transactions::create([
+                'user_id' => $user->id,
+                'type' => 'fee',
+                'currency' => $request->currency,
+                'amount_minor' => $fee,
+                'balance_before_minor' => $balanceBefore,
+                'balance_after_minor' => $balance->balance_minor,
+                'reference' => $deposit->id,
+                'meta' => ['context' => 'deposit'],
+            ]);
+        }
+
+        return redirect()->route('wallet')->with('success', 'Wallet topped up successfully!');
+    }
 
     public function requestWithdrawal(Request $request)
-{
-    $request->validate([
-        'amount' => 'required|numeric|min:500',
-        'currency' => 'required|in:NGN,USD',
-        'destination' => 'required|string', // e.g. bank acct or wallet address
-    ]);
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:500',
+            'currency' => 'required|in:NGN,USD',
+            'destination' => 'required|string', // e.g. bank acct or wallet address
+        ]);
 
-    $user = Auth::user();
-    $amountMinor = $request->amount * 100;
+        $user = Auth::user();
+        $amountMinor = $request->amount * 100;
 
-    $balance = WalletBalances::where('user_id', $user->id)
-        ->where('currency', $request->currency)
-        ->firstOrFail();
+        $balance = WalletBalances::where('user_id', $user->id)
+            ->where('currency', $request->currency)
+            ->firstOrFail();
 
-    if ($balance->available_balance < $amountMinor / 100) {
-        return back()->withErrors(['amount' => 'Insufficient funds']);
-    }
+        if ($balance->available_balance < $amountMinor / 100) {
+            return back()->withErrors(['amount' => 'Insufficient funds']);
+        }
 
-    // Calculate fees
-    $pricing = PricingRules::whereHas('chain', fn($q) =>
-        $q->where('slug', 'fiat'))->first();
+        // Calculate fees
+        $pricing = PricingRules::whereHas('chain', fn($q) =>
+            $q->where('slug', 'fiat'))->first();
 
-    $fee = ($pricing->percent_fee * $amountMinor) + $pricing->flat_fee_minor;
-    $netAmount = $amountMinor - $fee;
+        $fee = ($pricing->percent_fee * $amountMinor) + $pricing->flat_fee_minor;
+        $netAmount = $amountMinor - $fee;
 
-    // Reserve balance (prevent double spend)
-    $balanceBefore = $balance->balance_minor;
-    $balance->balance_minor -= $amountMinor;
-    $balance->reserved_minor += $amountMinor;
-    $balance->save();
+        // Reserve balance (prevent double spend)
+        $balanceBefore = $balance->balance_minor;
+        $balance->balance_minor -= $amountMinor;
+        $balance->reserved_minor += $amountMinor;
+        $balance->save();
 
-    // Create withdrawal transaction
-    Transactions::create([
-        'user_id' => $user->id,
-        'type' => 'withdrawal',
-        'currency' => $request->currency,
-        'amount_minor' => $netAmount,
-        'balance_before_minor' => $balanceBefore,
-        'balance_after_minor' => $balance->balance_minor,
-        'reference' => 'WDL-' . now()->timestamp,
-        'meta' => ['destination' => $request->destination, 'fee' => $fee],
-    ]);
-
-    // Separate fee transaction
-    if ($fee > 0) {
+        // Create withdrawal transaction
         Transactions::create([
             'user_id' => $user->id,
-            'type' => 'fee',
+            'type' => 'withdrawal',
             'currency' => $request->currency,
-            'amount_minor' => $fee,
+            'amount_minor' => $netAmount,
             'balance_before_minor' => $balanceBefore,
             'balance_after_minor' => $balance->balance_minor,
-            'reference' => 'WDL-FEE-' . now()->timestamp,
-            'meta' => ['context' => 'withdrawal'],
+            'reference' => 'WDL-' . now()->timestamp,
+            'meta' => ['destination' => $request->destination, 'fee' => $fee],
+        ]);
+
+        // Separate fee transaction
+        if ($fee > 0) {
+            Transactions::create([
+                'user_id' => $user->id,
+                'type' => 'fee',
+                'currency' => $request->currency,
+                'amount_minor' => $fee,
+                'balance_before_minor' => $balanceBefore,
+                'balance_after_minor' => $balance->balance_minor,
+                'reference' => 'WDL-FEE-' . now()->timestamp,
+                'meta' => ['context' => 'withdrawal'],
+            ]);
+        }
+
+        // TODO: queue actual blockchain/bank payout job here
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'message' => 'Withdrawal request submitted successfully',
+                'transaction_id' => 'pending',
+            ]);
+        }
+
+        return redirect()->route('wallet')->with('success', 'Withdrawal request submitted!');
+    }
+
+    public function withdraw()
+    {
+        $user = Auth::user();
+
+        // Get user's wallet balances
+        $balances = WalletBalances::where('user_id', $user->id)
+            ->get()
+            ->map(function ($balance) {
+                return [
+                    'currency' => $balance->currency,
+                    'balance' => $balance->balance_minor / 100, // Convert from minor units
+                    'reserved' => $balance->reserved_minor / 100,
+                    'available' => ($balance->balance_minor - $balance->reserved_minor) / 100,
+                    'token_balance' => $balance->token_balance,
+                ];
+            });
+
+        return Inertia::render('Wallet/Withdraw', [
+            'balances' => $balances,
         ]);
     }
 
-    // TODO: queue actual blockchain/bank payout job here
-
-    if ($request->wantsJson()) {
-        return response()->json([
-            'message' => 'Withdrawal request submitted successfully',
-            'transaction_id' => 'pending',
+    public function getWithdrawalEstimate(Request $request)
+    {
+        $validated = $request->validate([
+            'amount' => 'required|numeric|gt:0',
+            'currency' => 'required|in:ETH,BNB,SOL,USDT,USDC',
+            'network' => 'required|in:ethereum,binance,arbitrum,optimism,solana',
         ]);
-    }
 
-    return redirect()->route('wallet')->with('success', 'Withdrawal request submitted!');
-}
+        $amount = (float) $validated['amount'];
+        $currency = $validated['currency'];
+        $network = $validated['network'];
+        $user = Auth::user();
 
-/**
- * Show the withdrawal form
- */
-public function withdraw()
-{
-    $user = Auth::user();
+        // Check user's balance
+        $balanceRecord = WalletBalances::where('user_id', $user->id)
+            ->where('currency', $currency)
+            ->firstOrFail();
+        $availableBalance = $balanceRecord->token_balance;
 
-    // Get user's wallet balances
-    $balances = WalletBalances::where('user_id', $user->id)
-        ->get()
-        ->map(function ($balance) {
-            return [
-                'currency' => $balance->currency,
-                'balance' => $balance->balance_minor / 100, // Convert from minor units
-                'reserved' => $balance->reserved_minor / 100,
-                'available' => ($balance->balance_minor - $balance->reserved_minor) / 100,
-                'token_balance' => $balance->token_balance,
+        // Fetch real-time prices from CoinMarketCap
+        $coinIds = [
+            'ETH' => '1027', // Ethereum
+            'BNB' => '1839', // BNB
+            'SOL' => '5426', // Solana
+            'USDT' => '825', // Tether
+            'USDC' => '3408', // USD Coin
+        ];
+
+        $allCoinIds = implode(',', array_values($coinIds));
+        $priceResponse = Http::withHeaders([
+            'X-CMC_PRO_API_KEY' => env('COINMARKETCAP_API_KEY'),
+            'Accept' => 'application/json',
+        ])->get('https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest', [
+            'id' => $allCoinIds,
+            'convert' => 'USD',
+        ]);
+
+        if ($priceResponse->failed()) {
+            Log::error('Failed to fetch prices from CoinMarketCap', [
+                'status' => $priceResponse->status(),
+                'body' => $priceResponse->body(),
+            ]);
+            return response()->json(['error' => 'Unable to fetch current prices'], 500);
+        }
+
+        $prices = $priceResponse->json()['data'];
+
+        $price = $prices[$coinIds[$currency]]['quote']['USD']['price'] ?? 0.0;
+        $usdAmount = $amount * $price;
+
+        // Static USD to NGN exchange rate (replace with API call if available)
+        $usdToNgnRate = 1600; // Example rate: 1 USD = 1600 NGN
+        $ngnAmount = $usdAmount * $usdToNgnRate;
+
+        // Determine native currency
+        $nativeCurrency = match ($network) {
+            'binance' => 'BNB',
+            'solana' => 'SOL',
+            default => 'ETH',
+        };
+        $nativePrice = $prices[$coinIds[$nativeCurrency]]['quote']['USD']['price'] ?? 0.0;
+
+        // Get platform fee from PricingRules
+        $chain = \App\Models\Chains::where('slug', $network)->firstOrFail();
+        $pricing = PricingRules::where('chain_id', $chain->id)->first();
+
+        if (!$pricing) {
+            Log::error('No pricing rules found', ['network' => $network]);
+            return response()->json(['error' => 'No pricing rules found for this network'], 400);
+        }
+
+        $platformFee = $pricing->flat_fee_minor + ($amount * $pricing->percent_fee);
+        $usdPlatformFee = $platformFee * $price;
+        $ngnPlatformFee = $usdPlatformFee * $usdToNgnRate;
+
+        // Estimate gas fee
+        $isToken = $currency !== $nativeCurrency;
+        $gasLimit = $isToken ? 100000 : 21000; // Rough estimates: native vs token transfer
+
+        if ($network === 'solana') {
+            $gasFee = $isToken ? 0.000025 : 0.000005; // Approximate for Solana/SPL transfers
+        } else {
+            // EVM chains
+            $rpcUrls = [
+                'ethereum' => env('ETHEREUM_RPC'),
+                'binance' => env('BSC_RPC'),
+                'arbitrum' => env('ARBITRUM_RPC'),
+                'optimism' => env('OPTIMISM_RPC'),
             ];
-        });
 
-    return Inertia::render('Wallet/Withdraw', [
-        'balances' => $balances,
-    ]);
-}
+            $rpcUrl = $rpcUrls[$network] ?? null;
 
-/**
- * Process withdrawal request from web form
- */
+            if (!$rpcUrl) {
+                Log::warning('No RPC URL for network', ['network' => $network]);
+                $gasFee = 0.001; // Fallback
+            } else {
+                $gasPriceResponse = Http::post($rpcUrl, [
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'method' => 'eth_gasPrice',
+                    'params' => [],
+                ]);
+
+                if ($gasPriceResponse->failed()) {
+                    Log::error('Failed to fetch gas price', ['network' => $network]);
+                    $gasFee = 0.001; // Fallback
+                } else {
+                    $gasPriceHex = $gasPriceResponse->json()['result'];
+                    $gasPriceWei = hexdec($gasPriceHex);
+                    $gasPriceEth = $gasPriceWei / 1e18;
+                    $gasFee = $gasPriceEth * $gasLimit;
+                }
+            }
+        }
+
+        $usdGasFee = $gasFee * $nativePrice;
+        $ngnGasFee = $usdGasFee * $usdToNgnRate;
+
+        // Total cost
+        $totalInCurrency = $amount + $platformFee;
+        $totalUsd = $totalInCurrency * $price + ($nativeCurrency === $currency ? $gasFee * $price : $usdGasFee);
+        $ngnTotal = $totalUsd * $usdToNgnRate;
+
+        // Check if user has sufficient balance for amount + platform fee
+        if ($availableBalance < $totalInCurrency) {
+            return response()->json(['error' => 'Insufficient balance for amount and platform fee'], 400);
+        }
+
+        // Check native currency balance for gas fee if different
+        if ($nativeCurrency !== $currency) {
+            $nativeBalanceRecord = WalletBalances::where('user_id', $user->id)
+                ->where('currency', $nativeCurrency)
+                ->first();
+            $nativeAvailable = $nativeBalanceRecord ? $nativeBalanceRecord->token_balance : 0;
+            if ($nativeAvailable < $gasFee) {
+                return response()->json(['error' => "Insufficient $nativeCurrency balance for gas fees"], 400);
+            }
+        }
+
+        return response()->json([
+            'usdAmount' => $usdAmount,
+            'ngnAmount' => $ngnAmount,
+            'platformFee' => $platformFee,
+            'usdPlatformFee' => $usdPlatformFee,
+            'ngnPlatformFee' => $ngnPlatformFee,
+            'gasFee' => $gasFee,
+            'usdGasFee' => $usdGasFee,
+            'ngnGasFee' => $ngnGasFee,
+            'nativeCurrency' => $nativeCurrency,
+            'totalInCurrency' => $totalInCurrency,
+            'totalUsd' => $totalUsd,
+            'ngnTotal' => $ngnTotal,
+        ]);
+    }
+
     public function processWithdrawal(Request $request)
-{
+    {
         Log::info('processWithdrawal invoked', [
             'user_id' => optional($request->user())->id,
-            'payload' => $request->only(['amount','currency','wallet_address','network'])
+            'payload' => $request->only(['amount', 'currency', 'wallet_address', 'network'])
         ]);
-    $validated = $request->validate([
-        'amount' => 'required|numeric|gt:0',
+
+        $validated = $request->validate([
+            'amount' => 'required|numeric|gt:0',
             'currency' => 'required|in:NGN,USD,USDT,USDC,BTC,ETH,SOL',
             'wallet_address' => 'required_if:currency,ETH,USDT,USDC,SOL|string|max:255',
             'network' => 'nullable|in:ethereum,binance,arbitrum,optimism,solana',
-        'memo' => 'nullable|string|max:255',
-    ]);
+            'memo' => 'nullable|string|max:255',
+        ]);
 
         Log::info('processWithdrawal validated', [
             'user_id' => optional($request->user())->id,
@@ -322,16 +472,14 @@ public function withdraw()
         ]);
 
         // Additional validation for ETH address
-    if (in_array($validated['currency'], ['ETH', 'USDT', 'USDC'])) {
-        if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $validated['wallet_address'])) {
-            return back()->withErrors(['wallet_address' => 'Invalid Ethereum address format']);
+        if (in_array($validated['currency'], ['ETH', 'USDT', 'USDC'])) {
+            if (!preg_match('/^0x[a-fA-F0-9]{40}$/', $validated['wallet_address'])) {
+                return back()->withErrors(['wallet_address' => 'Invalid Ethereum address format']);
+            }
         }
-    }
 
         // Additional validation for SOL address (Base58)
         if ($validated['currency'] === 'SOL') {
-            // Base58 character set: 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-            // Allow typical Solana pubkey lengths 32-44
             if (!preg_match('/^[1-9A-HJ-NP-Za-km-z]{32,44}$/', $validated['wallet_address'])) {
                 Log::warning('processWithdrawal invalid SOL address', [
                     'user_id' => optional($request->user())->id,
@@ -341,182 +489,223 @@ public function withdraw()
             }
         }
 
-    // Set minimum amount based on currency
-    $minAmounts = [
-        'NGN' => 500,
-        'USD' => 10,
-        'ETH' => 0.000001,
-        'USDT' => 0.000001,
-        'USDC' => 0.000001,
-        'BTC' => 0.000001,
+        // Set minimum amount based on currency
+        $minAmounts = [
+            'NGN' => 500,
+            'USD' => 10,
+            'ETH' => 0.000001,
+            'USDT' => 0.000001,
+            'USDC' => 0.000001,
+            'BTC' => 0.000001,
             'SOL' => 0.001,
-    ];
+        ];
 
-    if ($validated['amount'] < ($minAmounts[$validated['currency']] ?? 0)) {
-        return back()->withErrors([
-            'amount' => 'Minimum withdrawal amount for ' . $validated['currency'] . ' is ' . ($minAmounts[$validated['currency']] ?? 'unsupported')
-        ]);
-    }
-
-    // Set destination and method
-    $validated['method'] = in_array($validated['currency'], ['NGN', 'USD']) ? 'bank' : 'crypto';
-    $validated['destination'] = $validated['wallet_address'] ?? '';
-
-    // For fiat currencies, we need bank details
-    if ($validated['method'] === 'bank') {
-        // Handle bank withdrawal
-        $bankDetails = $request->validate([
-            'bank_name' => 'required|string|max:255',
-            'account_number' => 'required|string|max:50',
-            'account_name' => 'required|string|max:255',
-        ]);
-
-        $validated['destination'] = json_encode($bankDetails);
-    }
-
-    $user = $request->user();
-    Log::info('processWithdrawal user resolved', [
-        'user_id' => optional($user)->id,
-    ]);
-
-    // Get user's wallet for the selected currency
-    $wallet = UserWallets::where('user_id', $user->id)
-        ->whereHas('chain', function($q) use ($validated) {
-            $q->where('symbol', $validated['currency']);
-        })
-        ->first();
-    Log::info('processWithdrawal wallet query done', [
-        'found' => (bool)$wallet,
-    ]);
-
-    if (!$wallet) {
-        Log::warning('processWithdrawal no wallet found for currency', [
-            'user_id' => $user->id,
-            'currency' => $validated['currency'],
-        ]);
-        return back()->withErrors(['wallet' => 'No wallet found for the selected currency']);
-    }
-
-    Log::info('processWithdrawal wallet found', [
-        'user_id' => $user->id,
-        'currency' => $validated['currency'],
-        'wallet_id' => $wallet->id,
-        'address' => $wallet->address,
-    ]);
-
-    // Check if user has sufficient balance
-    $balance = $this->getUserBalance($user->id, $validated['currency']);
-    Log::info('processWithdrawal internal balance check', [
-        'currency' => $validated['currency'],
-        'balance' => $balance,
-        'amount' => $validated['amount'],
-    ]);
-    if ($balance < $validated['amount']) {
-        Log::warning('processWithdrawal insufficient internal balance', [
-            'user_id' => $user->id,
-            'currency' => $validated['currency'],
-            'have' => $balance,
-            'want' => $validated['amount'],
-        ]);
-        return back()->withErrors(['amount' => 'Insufficient balance']);
-    }
-
-    // Reserve balance for crypto withdrawals BEFORE creating transaction
-    if ($validated['method'] === 'crypto') {
-        $balanceRecord = WalletBalances::where('user_id', $user->id)
-            ->where('currency', $validated['currency'])->firstOrFail();
-        if ($balanceRecord->available_token < $validated['amount']) {
-            return back()->withErrors(['amount' => 'Insufficient available balance']);
+        if ($validated['amount'] < ($minAmounts[$validated['currency']] ?? 0)) {
+            return back()->withErrors([
+                'amount' => 'Minimum withdrawal amount for ' . $validated['currency'] . ' is ' . ($minAmounts[$validated['currency']] ?? 'unsupported')
+            ]);
         }
-        $balanceRecord->reserved_token += $validated['amount'];
-        $balanceRecord->save();
-    }
 
-    // Create withdrawal record
-    $withdrawal = Transactions::create([
-        'user_id' => $user->id,
-        'type' => 'withdrawal',
-        'status' => 'pending',
-        'amount' => $validated['amount'],
-        'currency' => $validated['currency'],
-        'meta' => [
-            'method' => $validated['method'],
-            'destination' => $validated['destination'],
-            'network' => $validated['network'] ?? null,
-            'memo' => $validated['memo'] ?? null,
-        ],
-    ]);
+        // Set destination and method
+        $validated['method'] = in_array($validated['currency'], ['NGN', 'USD']) ? 'bank' : 'crypto';
+        $validated['destination'] = $validated['wallet_address'] ?? '';
 
-    // Process the withdrawal
-    try {
+        // For fiat currencies, we need bank details
+        if ($validated['method'] === 'bank') {
+            $bankDetails = $request->validate([
+                'bank_name' => 'required|string|max:255',
+                'account_number' => 'required|string|max:50',
+                'account_name' => 'required|string|max:255',
+            ]);
+            $validated['destination'] = json_encode($bankDetails);
+        }
+
+        $user = $request->user();
+        Log::info('processWithdrawal user resolved', [
+            'user_id' => optional($user)->id,
+        ]);
+
+        // Get user's wallet for the selected currency
+        $wallet = UserWallets::where('user_id', $user->id)
+            ->whereHas('chain', function ($q) use ($validated) {
+                $q->where('symbol', $validated['currency']);
+            })
+            ->first();
+        Log::info('processWithdrawal wallet query done', [
+            'found' => (bool)$wallet,
+        ]);
+
+        if (!$wallet) {
+            Log::warning('processWithdrawal no wallet found for currency', [
+                'user_id' => $user->id,
+                'currency' => $validated['currency'],
+            ]);
+            return back()->withErrors(['wallet' => 'No wallet found for the selected currency']);
+        }
+
+        Log::info('processWithdrawal wallet found', [
+            'user_id' => $user->id,
+            'currency' => $validated['currency'],
+            'wallet_id' => $wallet->id,
+            'address' => $wallet->address,
+        ]);
+
+        // Get withdrawal estimate to validate fees
         if ($validated['method'] === 'crypto') {
-            // Queue the blockchain withdrawal
-            ProcessBlockchainWithdrawal::dispatch(
-                $withdrawal,
-                $user,
-                $wallet,
-                $validated['destination'],
-                $validated['amount'],
-                $validated['currency'],
-                ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
-                $validated['memo'] ?? null
-            )->onQueue('withdrawals');
-            Log::info('processWithdrawal job dispatched', [
-                'withdrawal_id' => $withdrawal->id,
-                'queue' => 'withdrawals',
+            $estimateResponse = $this->getWithdrawalEstimate(new Request([
+                'amount' => $validated['amount'],
+                'currency' => $validated['currency'],
                 'network' => ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
-            ]);
+            ]));
 
-            $message = 'Withdrawal initiated successfully. Transaction is being processed.';
-        } else {
-            // For bank withdrawals, mark as pending admin approval
-            $withdrawal->update(['status' => 'processing']);
-            // TODO: Notify admin about the bank withdrawal request
-            $message = 'Bank withdrawal request submitted. It will be processed within 1-2 business days.';
+            if ($estimateResponse->getStatusCode() !== 200) {
+                $error = json_decode($estimateResponse->getContent(), true)['error'] ?? 'Unable to validate fees';
+                return back()->withErrors(['withdrawal' => $error]);
+            }
+
+            $estimate = json_decode($estimateResponse->getContent(), true);
+
+            // Check balance for amount + platform fee
+            $totalInCurrency = $estimate['totalInCurrency'];
+            $balance = $this->getUserBalance($user->id, $validated['currency']);
+            if ($balance < $totalInCurrency) {
+                Log::warning('processWithdrawal insufficient balance including fees', [
+                    'user_id' => $user->id,
+                    'currency' => $validated['currency'],
+                    'have' => $balance,
+                    'want' => $totalInCurrency,
+                ]);
+                return back()->withErrors(['amount' => 'Insufficient balance including platform fees']);
+            }
+
+            // Check native currency balance for gas fee
+            if ($estimate['nativeCurrency'] !== $validated['currency']) {
+                $nativeBalance = $this->getUserBalance($user->id, $estimate['nativeCurrency']);
+                if ($nativeBalance < $estimate['gasFee']) {
+                    Log::warning('processWithdrawal insufficient native currency balance for gas', [
+                        'user_id' => $user->id,
+                        'native_currency' => $estimate['nativeCurrency'],
+                        'have' => $nativeBalance,
+                        'want' => $estimate['gasFee'],
+                    ]);
+                    return back()->withErrors(['amount' => "Insufficient {$estimate['nativeCurrency']} balance for gas fees"]);
+                }
+            }
+
+            // Reserve balance including platform fee
+            $balanceRecord = WalletBalances::where('user_id', $user->id)
+                ->where('currency', $validated['currency'])
+                ->firstOrFail();
+            $balanceRecord->reserved_token += $totalInCurrency; // Reserve amount + platform fee
+            $balanceRecord->save();
         }
 
-        if ($request->wantsJson()) {
-            return response()->json([
-                'status' => 'processing',
-                'message' => $message,
-                'transaction_id' => $withdrawal->id,
-                'explorer_url' => null,
-                'error' => null
-            ]);
-        }
-
-        return back()->with('success', $message);
-
-    } catch (\Exception $e) {
-        // Map exception to human-readable error
-        $humanReadableError = $this->mapExceptionToUserMessage($e);
-        
-        $withdrawal->update([
-            'status' => 'failed',
-            'failure_reason' => $humanReadableError
-        ]);
-
-        Log::error('Withdrawal controller exception', [
+        // Create withdrawal record
+        $withdrawal = Transactions::create([
             'user_id' => $user->id,
-            'withdrawal_id' => $withdrawal->id,
-            'human_readable_error' => $humanReadableError,
-            'raw_error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString(),
+            'type' => 'withdrawal',
+            'status' => 'pending',
+            'amount' => $validated['amount'],
+            'currency' => $validated['currency'],
+            'meta' => [
+                'method' => $validated['method'],
+                'destination' => $validated['destination'],
+                'network' => $validated['network'] ?? null,
+                'memo' => $validated['memo'] ?? null,
+                'platform_fee' => $validated['method'] === 'crypto' ? $estimate['platformFee'] : null,
+            ],
         ]);
 
-        if ($request->wantsJson()) {
-            return response()->json([
-                'status' => 'failed',
-                'message' => null,
-                'transaction_id' => $withdrawal->id,
-                'explorer_url' => null,
-                'error' => $humanReadableError
-            ], 422);
+        // Record platform fee as a separate transaction
+        if ($validated['method'] === 'crypto' && $estimate['platformFee'] > 0) {
+            Transactions::create([
+                'user_id' => $user->id,
+                'type' => 'fee',
+                'currency' => $validated['currency'],
+                'amount' => $estimate['platformFee'],
+                'balance_before' => $balanceRecord->token_balance,
+                'balance_after' => $balanceRecord->token_balance - $estimate['platformFee'],
+                'reference' => 'FEE-' . $withdrawal->id,
+                'meta' => ['context' => 'withdrawal', 'withdrawal_id' => $withdrawal->id],
+            ]);
         }
 
-        return back()->withErrors(['withdrawal' => $humanReadableError]);
+        // Process the withdrawal
+        try {
+            if ($validated['method'] === 'crypto') {
+                // Queue the blockchain withdrawal
+                ProcessBlockchainWithdrawal::dispatch(
+                    $withdrawal,
+                    $user,
+                    $wallet,
+                    $validated['destination'],
+                    $validated['amount'],
+                    $validated['currency'],
+                    ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
+                    $validated['memo'] ?? null
+                )->onQueue('withdrawals');
+                Log::info('processWithdrawal job dispatched', [
+                    'withdrawal_id' => $withdrawal->id,
+                    'queue' => 'withdrawals',
+                    'network' => ($validated['currency'] === 'SOL') ? 'solana' : ($validated['network'] ?? 'ethereum'),
+                ]);
+
+                $message = 'Withdrawal initiated successfully. Transaction is being processed.';
+            } else {
+                // For bank withdrawals, mark as pending admin approval
+                $withdrawal->update(['status' => 'processing']);
+                $message = 'Bank withdrawal request submitted. It will be processed within 1-2 business days.';
+            }
+
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'status' => 'processing',
+                    'message' => $message,
+                    'transaction_id' => $withdrawal->id,
+                    'explorer_url' => null,
+                    'error' => null,
+                ]);
+            }
+
+            return back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            // Map exception to human-readable error
+            $humanReadableError = $this->mapExceptionToUserMessage($e);
+
+            $withdrawal->update([
+                'status' => 'failed',
+                'failure_reason' => $humanReadableError,
+            ]);
+
+            // Revert reserved balance
+            if ($validated['method'] === 'crypto') {
+                $balanceRecord->reserved_token -= $totalInCurrency;
+                $balanceRecord->token_balance += $totalInCurrency;
+                $balanceRecord->save();
+            }
+
+            Log::error('Withdrawal controller exception', [
+                'user_id' => $user->id,
+                'withdrawal_id' => $withdrawal->id,
+                'human_readable_error' => $humanReadableError,
+                'raw_error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'status' => 'failed',
+                    'message' => null,
+                    'transaction_id' => $withdrawal->id,
+                    'explorer_url' => null,
+                    'error' => $humanReadableError,
+                ], 422);
+            }
+
+            return back()->withErrors(['withdrawal' => $humanReadableError]);
+        }
     }
-}
 
     /**
      * Get user's balance for a specific currency

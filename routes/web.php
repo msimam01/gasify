@@ -20,7 +20,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('wallet/topup/process', [WalletController::class, 'processTopup'])->name('wallet.topup.process');
     Route::post('wallet/withdraw/process', [WalletController::class, 'processWithdrawal'])->name('wallet.withdraw.process');
     Route::post('wallet/solana/request-devnet-tokens', [WalletController::class, 'requestDevnetTokens'])->name('wallet.solana.request-devnet-tokens');
-    
+    Route::get('api/withdrawal-estimate', [WalletController::class, 'getWithdrawalEstimate'])->name('wallet.withdrawalEstimate');
     // Withdrawal status API
     Route::get('api/withdrawal-status/{id}', [WalletController::class, 'getWithdrawalStatus'])->name('api.withdrawal.status');
 });

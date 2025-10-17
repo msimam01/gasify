@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Head, useForm, Link, router } from '@inertiajs/react';
 import { route } from 'ziggy-js';
 import AppLayout from '@/layouts/app-layout';
@@ -13,6 +13,15 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Loader2 } from 'lucide-react';
 import axios from 'axios';
+
+// Simple debounce function to limit API calls
+const debounce = (func: (...args: any[]) => void, wait: number) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: any[]) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
 
 interface WalletBalance {
   currency: string;
@@ -39,6 +48,21 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [estimate, setEstimate] = useState<{
+    usdAmount: number;
+    ngnAmount: number;
+    platformFee: number;
+    usdPlatformFee: number;
+    ngnPlatformFee: number;
+    gasFee: number;
+    usdGasFee: number;
+    ngnGasFee: number;
+    nativeCurrency: string;
+    totalInCurrency: number;
+    totalUsd: number;
+    ngnTotal: number;
+  } | null>(null);
+  const [isFetchingEstimate, setIsFetchingEstimate] = useState(false);
 
   const { data, setData, post, processing, errors, reset } = useForm({
     amount: '',
@@ -67,7 +91,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
     available: 0,
     balance: 0,
     reserved: 0,
-    token_balance: 0
+    token_balance: 0,
   };
 
   // Check if currency is fiat
@@ -106,26 +130,92 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
     }
   };
 
+  // Fetch withdrawal estimate
+  const fetchEstimate = useCallback(
+    debounce(() => {
+      if (selectedMethod === 'crypto' && data.amount && parseFloat(data.amount) > 0 && data.network) {
+        setIsFetchingEstimate(true);
+        axios
+          .get('/api/withdrawal-estimate', {
+            params: {
+              amount: data.amount,
+              currency: selectedCurrency,
+              network: data.network,
+            },
+            headers: {
+              Accept: 'application/json',
+            },
+          })
+          .then(response => {
+            setEstimate(response.data);
+            setErrorMessage('');
+          })
+          .catch(error => {
+            console.error('Failed to fetch withdrawal estimate:', error);
+            let message = 'Unable to fetch fee estimates. Please try again.';
+            if (error.response?.status === 404) {
+              message = 'Withdrawal estimate service is unavailable. Please contact support.';
+            } else if (error.response?.status === 401) {
+              message = 'Please log in to fetch withdrawal estimates.';
+            } else if (error.response?.data?.error) {
+              message = error.response.data.error;
+            }
+            setErrorMessage(message);
+            setEstimate(null);
+          })
+          .finally(() => {
+            setIsFetchingEstimate(false);
+          });
+      } else {
+        setEstimate(null);
+        setErrorMessage('');
+        setIsFetchingEstimate(false);
+      }
+    }, 500),
+    [data.amount, selectedCurrency, data.network, selectedMethod]
+  );
+
+  // Trigger estimate fetch on amount, currency, network, or method change
+  useEffect(() => {
+    fetchEstimate();
+  }, [fetchEstimate]);
+
+  // Check if user can afford the withdrawal including fees
+  const canWithdraw = useMemo(() => {
+    if (!estimate || isFiat) return true;
+    const available = isFiat ? selectedBalance.available : selectedBalance.token_balance;
+    if (available < estimate.totalInCurrency) {
+      return false;
+    }
+    if (selectedCurrency !== estimate.nativeCurrency) {
+      const nativeBalance = balances.find(b => b.currency === estimate.nativeCurrency);
+      const nativeAvailable = nativeBalance ? (nativeBalance.available || nativeBalance.token_balance) : 0;
+      if (nativeAvailable < estimate.gasFee) {
+        return false;
+      }
+    }
+    return true;
+  }, [estimate, selectedBalance, balances, selectedCurrency, isFiat]);
+
   // Poll for transaction status
   useEffect(() => {
     if (!transactionId || !isPolling) return;
-
     const pollInterval = setInterval(async () => {
       try {
         const response = await axios.get(`/api/withdrawal-status/${transactionId}`);
         const data = response.data;
-        
+
         setTransactionStatus(data.status);
         setStatusMessage(data.message || '');
-        
+
         if (data.explorer_url) {
           setExplorerUrl(data.explorer_url);
         }
-        
+
         if (data.status === 'failed') {
           setErrorMessage(data.failure_reason || 'Withdrawal failed. Please try again.');
         }
-        
+
         // Stop polling if completed or failed
         if (data.status === 'completed' || data.status === 'failed') {
           setIsPolling(false);
@@ -136,14 +226,13 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
         // Don't stop polling on network errors, keep trying
       }
     }, 3000); // Poll every 3 seconds
-
     return () => clearInterval(pollInterval);
   }, [transactionId, isPolling]);
 
   // Handle form submit
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       const response = await axios.post('/wallet/withdraw/process', data, {
         headers: {
@@ -151,9 +240,9 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
           'Content-Type': 'application/json',
         },
       });
-      
+
       const responseData = response.data;
-      
+
       // Handle structured response
       if (responseData.transaction_id) {
         setTransactionId(responseData.transaction_id);
@@ -167,12 +256,12 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
       }
     } catch (error: any) {
       console.error('Withdrawal submission failed:', error);
-      
+
       // Handle error response
       if (error.response?.data) {
         const errorData = error.response.data;
         setErrorMessage(errorData.error || 'Failed to process withdrawal. Please try again.');
-        
+
         if (errorData.transaction_id) {
           setTransactionId(errorData.transaction_id);
           setTransactionStatus('failed');
@@ -192,7 +281,6 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   const handleCurrencyChange = (value: string) => {
     setSelectedCurrency(value);
     setData('currency', value);
-
     // Reset to bank transfer when switching to fiat
     if (['NGN', 'USD'].includes(value)) {
       setSelectedMethod('bank');
@@ -240,12 +328,13 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
   };
 
   return (
-    <AppLayout breadcrumbs={[
-      { title: 'My Wallet', href: 'wallet' },
-      { title: 'Withdraw', href: 'withdraw' }
-    ]}>
+    <AppLayout
+      breadcrumbs={[
+        { title: 'My Wallet', href: 'wallet' },
+        { title: 'Withdraw', href: 'withdraw' },
+      ]}
+    >
       <Head title="Withdraw Funds" />
-
       <div className="flex flex-1 flex-col">
         <div className="@container/main flex flex-1 flex-col gap-2">
           <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
@@ -261,7 +350,6 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                 <p className="text-muted-foreground">Transfer money to your bank or crypto wallet</p>
               </div>
             </div>
-
             <div className="px-4 lg:px-6">
               <div className="max-w-2xl mx-auto">
                 <form onSubmit={handleSubmit} className="space-y-6">
@@ -273,12 +361,11 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                         {getCurrencySymbol(selectedBalance.currency)}
                         {(isFiat ? selectedBalance.available : selectedBalance.token_balance).toLocaleString(undefined, {
                           minimumFractionDigits: isFiat ? 2 : 6,
-                          maximumFractionDigits: isFiat ? 2 : 9
+                          maximumFractionDigits: isFiat ? 2 : 9,
                         })}
                       </CardTitle>
                     </CardHeader>
                   </Card>
-
                   {/* Amount Section */}
                   <Card>
                     <CardHeader>
@@ -289,15 +376,12 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                         <Label htmlFor="amount">Amount</Label>
                         <div className="flex gap-2">
                           {/* Currency Select */}
-                          <Select
-                            value={selectedCurrency}
-                            onValueChange={handleCurrencyChange}
-                          >
+                          <Select value={selectedCurrency} onValueChange={handleCurrencyChange}>
                             <SelectTrigger className="w-28">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {balances.map((balance) => (
+                              {balances.map(balance => (
                                 <SelectItem key={balance.currency} value={balance.currency}>
                                   {getCurrencySymbol(balance.currency)} {balance.currency}
                                 </SelectItem>
@@ -305,31 +389,37 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                             </SelectContent>
                           </Select>
                           {/* Input field */}
-                          <Input
-                            id="amount"
-                            name="amount"
-                            type="number"
-                            placeholder="0.00"
-                            value={data.amount}
-                            onChange={(e) => setData('amount', e.target.value)}
-                            className="flex-1"
-                            min={getMinAmount(selectedCurrency)}
-                            step={getAmountStep(selectedCurrency)}
-                            required
-                          />
+                          <div className="relative flex-1">
+                            <Input
+                              id="amount"
+                              name="amount"
+                              type="number"
+                              placeholder="0.00"
+                              value={data.amount}
+                              onChange={e => setData('amount', e.target.value)}
+                              className="flex-1 pr-10"
+                              min={getMinAmount(selectedCurrency)}
+                              step={getAmountStep(selectedCurrency)}
+                              required
+                            />
+                            {isFetchingEstimate && (
+                              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 animate-spin text-muted-foreground -translate-y-1/2" />
+                            )}
+                          </div>
                         </div>
                         {errors.amount && <p className="text-sm text-red-600">{errors.amount}</p>}
                         {errors.currency && <p className="text-sm text-red-600">{errors.currency}</p>}
+                        {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
                         <p className="text-xs text-muted-foreground">
-                          Minimum: {getCurrencySymbol(selectedCurrency)}{getMinAmount(selectedCurrency).toLocaleString()}
+                          Minimum: {getCurrencySymbol(selectedCurrency)}
+                          {getMinAmount(selectedCurrency).toLocaleString()}
                         </p>
                       </div>
-
                       {/* Quick Amounts */}
                       <div>
                         <Label className="text-sm text-muted-foreground">Quick amounts</Label>
                         <div className="grid grid-cols-3 gap-2 mt-2">
-                          {getQuickAmounts().map((amount) => (
+                          {getQuickAmounts().map(amount => (
                             <Button
                               key={amount}
                               type="button"
@@ -338,86 +428,71 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                               onClick={() => handleQuickAmount(amount)}
                               className="text-xs"
                             >
-                              {getCurrencySymbol(selectedCurrency)}{amount.toLocaleString()}
+                              {getCurrencySymbol(selectedCurrency)}
+                              {amount.toLocaleString()}
                             </Button>
                           ))}
                         </div>
                       </div>
                     </CardContent>
                   </Card>
-
                   {/* Withdrawal Method */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Withdrawal Method</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      <Tabs
-                        value={selectedMethod}
-                        onValueChange={setSelectedMethod}
-                        className="w-full"
-                      >
+                      <Tabs value={selectedMethod} onValueChange={setSelectedMethod} className="w-full">
                         <TabsList className="grid w-full grid-cols-2">
-                          {withdrawalMethods.map((method) => (
-                            <TabsTrigger
-                              key={method.id}
-                              value={method.id}
-                              disabled={!method.enabled}
-                            >
+                          {withdrawalMethods.map(method => (
+                            <TabsTrigger key={method.id} value={method.id} disabled={!method.enabled}>
                               {method.name}
                             </TabsTrigger>
                           ))}
                         </TabsList>
-
                         {/* Bank Transfer Method */}
                         <TabsContent value="bank" className="space-y-4 pt-4">
                           <Alert>
                             <IconAlertCircle className="h-4 w-4" />
-                            <AlertDescription>
-                              Bank withdrawals are processed within 1-2 business days
-                            </AlertDescription>
+                            <AlertDescription>Bank withdrawals are processed within 1-2 business days</AlertDescription>
                           </Alert>
-
                           <div className="space-y-2">
                             <Label htmlFor="bank_name">Bank Name</Label>
                             <Input
                               id="bank_name"
                               name="bank_name"
                               value={data.bank_name}
-                              onChange={(e) => setData('bank_name', e.target.value)}
+                              onChange={e => setData('bank_name', e.target.value)}
                               placeholder="Enter bank name"
                               required={selectedMethod === 'bank'}
                             />
                             {errors.bank_name && <p className="text-sm text-red-600">{errors.bank_name}</p>}
                           </div>
-
                           <div className="space-y-2">
                             <Label htmlFor="account_number">Account Number</Label>
                             <Input
                               id="account_number"
                               name="account_number"
                               value={data.account_number}
-                              onChange={(e) => setData('account_number', e.target.value)}
+                              onChange={e => setData('account_number', e.target.value)}
                               placeholder="Enter account number"
                               required={selectedMethod === 'bank'}
                             />
                             {errors.account_number && <p className="text-sm text-red-600">{errors.account_number}</p>}
                           </div>
-
                           <div className="space-y-2">
                             <Label htmlFor="account_name">Account Name</Label>
                             <Input
                               id="account_name"
                               name="account_name"
                               value={data.account_name}
-                              onChange={(e) => setData('account_name', e.target.value)}
+                              onChange={e => setData('account_name', e.target.value)}
                               placeholder="Account holder name"
                               required={selectedMethod === 'bank'}
                             />
                             {errors.account_name && <p className="text-sm text-red-600">{errors.account_name}</p>}
                           </div>
                         </TabsContent>
-
                         {/* Crypto Withdrawal Method */}
                         <TabsContent value="crypto" className="space-y-4 pt-4">
                           {/* Network Selection Alert for Solana */}
@@ -425,30 +500,27 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                             <Alert>
                               <IconAlertCircle className="h-4 w-4" />
                               <AlertDescription>
-                                Solana withdrawals are fast and typically confirm within seconds.
-                                Make sure you're sending to a Solana wallet address.
+                                Solana withdrawals are fast and typically confirm within seconds. Make sure you're sending
+                                to a Solana wallet address.
                               </AlertDescription>
                             </Alert>
                           )}
-
                           {!isSolana && availableNetworks.length > 0 && (
                             <Alert>
                               <IconAlertCircle className="h-4 w-4" />
                               <AlertDescription>
-                                Make sure to select the correct network. Sending to the wrong network may result in loss of funds.
+                                Make sure to select the correct network. Sending to the wrong network may result in loss of
+                                funds.
                               </AlertDescription>
                             </Alert>
                           )}
-
                           <div className="space-y-2">
-                            <Label htmlFor="wallet_address">
-                              {isSolana ? 'Solana Wallet Address' : 'Wallet Address'}
-                            </Label>
+                            <Label htmlFor="wallet_address">{isSolana ? 'Solana Wallet Address' : 'Wallet Address'}</Label>
                             <Input
                               id="wallet_address"
                               name="wallet_address"
                               value={data.wallet_address}
-                              onChange={(e) => setData('wallet_address', e.target.value)}
+                              onChange={e => setData('wallet_address', e.target.value)}
                               placeholder={isSolana ? 'Enter Solana wallet address (Base58)' : 'Enter wallet address'}
                               required={selectedMethod === 'crypto'}
                               className="font-mono text-sm"
@@ -460,21 +532,16 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                               </p>
                             )}
                           </div>
-
                           {/* Network Selection - Only show if not Solana */}
                           {!isSolana && availableNetworks.length > 0 && (
                             <div className="space-y-2">
                               <Label htmlFor="network">Network</Label>
-                              <Select
-                                name="network"
-                                value={data.network}
-                                onValueChange={(value) => setData('network', value)}
-                              >
+                              <Select name="network" value={data.network} onValueChange={value => setData('network', value)}>
                                 <SelectTrigger>
                                   <SelectValue placeholder="Select network" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {availableNetworks.map((network) => (
+                                  {availableNetworks.map(network => (
                                     <SelectItem key={network.id} value={network.id}>
                                       {network.name}
                                     </SelectItem>
@@ -484,24 +551,20 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                               {errors.network && <p className="text-sm text-red-600">{errors.network}</p>}
                             </div>
                           )}
-
                           {/* Memo/Tag field (optional for all crypto) */}
                           <div className="space-y-2">
-                            <Label htmlFor="memo">
-                              Memo/Tag (Optional)
-                            </Label>
+                            <Label htmlFor="memo">Memo/Tag (Optional)</Label>
                             <Input
                               id="memo"
                               name="memo"
                               value={data.memo}
-                              onChange={(e) => setData('memo', e.target.value)}
+                              onChange={e => setData('memo', e.target.value)}
                               placeholder="Enter memo or tag if required"
                             />
                             <p className="text-xs text-muted-foreground">
                               Some exchanges require a memo or tag. Leave blank if not needed.
                             </p>
                           </div>
-
                           {/* Transaction info */}
                           <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                             <div className="flex justify-between text-sm">
@@ -514,9 +577,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                             </div>
                             <div className="flex justify-between text-sm">
                               <span className="text-muted-foreground">Estimated Time</span>
-                              <span className="font-medium">
-                                {isSolana ? '~1-2 minutes' : '~5-15 minutes'}
-                              </span>
+                              <span className="font-medium">{isSolana ? '~1-2 minutes' : '~5-15 minutes'}</span>
                             </div>
                             <div className="flex justify-between text-sm">
                               <span className="text-muted-foreground">Network Fee</span>
@@ -529,7 +590,6 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                       </Tabs>
                     </CardContent>
                   </Card>
-
                   {/* Summary Card */}
                   {data.amount && parseFloat(data.amount) > 0 && (
                     <Card>
@@ -540,32 +600,74 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Amount</span>
                           <span className="font-semibold">
-                            {getCurrencySymbol(selectedCurrency)}{parseFloat(data.amount).toLocaleString(undefined, {
+                            {getCurrencySymbol(selectedCurrency)}
+                            {parseFloat(data.amount).toLocaleString(undefined, {
                               minimumFractionDigits: isFiat ? 2 : 6,
-                              maximumFractionDigits: isFiat ? 2 : 9
+                              maximumFractionDigits: isFiat ? 2 : 9,
                             })}
                           </span>
                         </div>
+                        {isFetchingEstimate && (
+                          <div className="flex justify-center">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          </div>
+                        )}
+                        {estimate && !isFetchingEstimate && (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">NGN Equivalent</span>
+                              <span className="font-medium">
+                                ₦{estimate.ngnAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">USD Equivalent</span>
+                              <span className="font-medium">
+                                ${estimate.usdAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Platform Fee</span>
+                              <span className="font-medium">
+                                {estimate.platformFee.toLocaleString(undefined, { maximumFractionDigits: 6 })}{' '}
+                                {selectedCurrency} (~₦{estimate.ngnPlatformFee.toLocaleString(undefined, { maximumFractionDigits: 2 })})
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Estimated Gas Fee</span>
+                              <span className="font-medium">
+                                {estimate.gasFee.toLocaleString(undefined, { maximumFractionDigits: 6 })}{' '}
+                                {estimate.nativeCurrency} (~₦{estimate.ngnGasFee.toLocaleString(undefined, { maximumFractionDigits: 2 })})
+                              </span>
+                            </div>
+                            <div className="flex justify-between font-bold">
+                              <span className="text-muted-foreground">Total Cost</span>
+                              <span className="font-medium">
+                                {estimate.totalInCurrency.toLocaleString(undefined, { maximumFractionDigits: 6 })}{' '}
+                                {selectedCurrency} (~₦{estimate.ngnTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })})
+                              </span>
+                            </div>
+                          </>
+                        )}
                         <div className="flex justify-between">
                           <span className="text-muted-foreground">Method</span>
                           <span className="font-medium">
-                            {selectedMethod === 'bank' ? 'Bank Transfer' :
-                             isSolana ? 'Solana Network' :
-                             availableNetworks.find(n => n.id === data.network)?.name || 'Crypto Wallet'}
+                            {selectedMethod === 'bank'
+                              ? 'Bank Transfer'
+                              : isSolana
+                              ? 'Solana Network'
+                              : availableNetworks.find(n => n.id === data.network)?.name || 'Crypto Wallet'}
                           </span>
                         </div>
                         {selectedMethod === 'crypto' && data.wallet_address && (
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Destination</span>
-                            <span className="font-mono text-xs truncate max-w-[200px]">
-                              {data.wallet_address}
-                            </span>
+                            <span className="font-mono text-xs truncate max-w-[200px]">{data.wallet_address}</span>
                           </div>
                         )}
                       </CardContent>
                     </Card>
                   )}
-
                   {/* Warning */}
                   {selectedMethod === 'crypto' && (
                     <Alert variant="destructive">
@@ -578,14 +680,27 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                       </AlertDescription>
                     </Alert>
                   )}
-
+                  {!canWithdraw && (
+                    <Alert variant="destructive">
+                      <IconAlertCircle className="h-4 w-4" />
+                      <AlertDescription>
+                        Insufficient balance to cover the withdrawal amount including platform and gas fees.
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   {/* Withdrawal Button */}
                   <div className="flex justify-end">
                     <Button
                       type="submit"
                       size="lg"
                       className="w-full sm:w-auto"
-                      disabled={processing || !data.amount || (selectedMethod === 'crypto' && !data.wallet_address) || (!isSolana && selectedMethod === 'crypto' && !data.network)}
+                      disabled={
+                        processing ||
+                        !data.amount ||
+                        (selectedMethod === 'crypto' && !data.wallet_address) ||
+                        (!isSolana && selectedMethod === 'crypto' && !data.network) ||
+                        !canWithdraw
+                      }
                     >
                       {processing ? (
                         <>
@@ -603,7 +718,6 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
           </div>
         </div>
       </div>
-
       {/* Success Dialog */}
       <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
         <DialogContent className="sm:max-w-md">
@@ -629,9 +743,7 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                 <>
                   {statusMessage || 'Your withdrawal has been completed successfully!'}
                   {explorerUrl && (
-                    <div className="mt-2 text-sm text-muted-foreground">
-                      Transaction ID: #{transactionId}
-                    </div>
+                    <div className="mt-2 text-sm text-muted-foreground">Transaction ID: #{transactionId}</div>
                   )}
                 </>
               ) : transactionStatus === 'failed' ? (
@@ -639,16 +751,12 @@ export default function WalletWithdraw({ balances }: { balances: WalletBalance[]
                   <div className="text-red-600 font-medium">
                     {errorMessage || 'Your withdrawal could not be processed. Please try again.'}
                   </div>
-                  <div className="mt-2 text-sm text-muted-foreground">
-                    Transaction ID: #{transactionId}
-                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">Transaction ID: #{transactionId}</div>
                 </>
               ) : (
                 <>
                   {statusMessage || 'Your withdrawal is being processed. This may take a few moments.'}
-                  <div className="mt-4 text-sm text-muted-foreground">
-                    Transaction ID: #{transactionId}
-                  </div>
+                  <div className="mt-4 text-sm text-muted-foreground">Transaction ID: #{transactionId}</div>
                 </>
               )}
             </DialogDescription>

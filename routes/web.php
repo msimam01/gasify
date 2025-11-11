@@ -27,3 +27,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
 require __DIR__.'/settings.php';
 require __DIR__.'/auth.php';
+
+// Social Login Routes (requires Laravel Socialite)
+// Route::get('/auth/google', [App\Http\Controllers\Auth\SocialController::class, 'redirectToGoogle'])->name('auth.google');
+// Route::get('/auth/google/callback', [App\Http\Controllers\Auth\SocialController::class, 'handleGoogleCallback']);
+// Route::get('/auth/x', [App\Http\Controllers\Auth\SocialController::class, 'redirectToX'])->name('auth.x');
+// Route::get('/auth/x/callback', [App\Http\Controllers\Auth\SocialController::class, 'handleXCallback']);

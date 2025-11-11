@@ -1,68 +1,70 @@
-import { CheckCircle2, Zap, Globe, Shield, Rocket, BarChart2, Users } from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
+import { Search, Handshake, Fuel, PiggyBank, MessageSquare, Users } from "lucide-react"
 
 const features = [
   {
-    name: 'Multi-Chain Support',
-    description: 'Manage gas fees across multiple blockchains from a single dashboard.',
-    icon: Globe,
+    name: 'Airdrop Discovery',
+    description: 'Spot legit drops on Solana/ETH – Filters & Alerts. Never miss valuable opportunities.',
+    icon: Search,
+    color: 'bg-blue-600'
   },
   {
-    name: 'Airdrop Access',
-    description: 'Get exclusive access to thousands of airdrops and early-stage crypto projects.',
-    icon: Rocket,
+    name: 'P2P Trading',
+    description: 'Secure swaps with escrow & local ratings. Trade safely with verified Nigerian users.',
+    icon: Handshake,
+    color: 'bg-emerald-600'
   },
   {
-    name: 'Gas Optimization',
-    description: 'Smart algorithms to help you save on transaction fees across networks.',
-    icon: Zap,
+    name: 'Gas Management',
+    description: 'Buy credits in NGN – Auto-optimize fees. Save up to 70% on transaction costs.',
+    icon: Fuel,
+    color: 'bg-orange-600'
   },
   {
-    name: 'Secure & Private',
-    description: 'Non-custodial solution that keeps you in control of your assets.',
-    icon: Shield,
+    name: 'Savings Vaults',
+    description: 'Lock & earn 12% APY – No bank needed. Your crypto works for you 24/7.',
+    icon: PiggyBank,
+    color: 'bg-purple-600'
   },
   {
-    name: 'Portfolio Tracking',
-    description: 'Monitor all your cross-chain assets in one place with real-time updates.',
-    icon: BarChart2,
+    name: 'USSD/WhatsApp Bot',
+    description: 'Offline access: *GASIFY# for balance & votes. Crypto in your pocket, always.',
+    icon: MessageSquare,
+    color: 'bg-green-600'
   },
   {
-    name: 'Community Driven',
-    description: 'Join a growing community of crypto enthusiasts and developers.',
+    name: 'DAO Governance',
+    description: 'Vote with $GTRUST – Own the platform. Your voice shapes Gasify\'s future.',
     icon: Users,
-  },
+    color: 'bg-indigo-600'
+  }
 ]
 
 export function FeaturesSection() {
   return (
-    <section id="features" className="py-20 sm:py-24">
+    <section id="features" className="py-20 bg-slate-900">
       <div className="container mx-auto px-4">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Everything you need in one place
+        <div className="mx-auto max-w-2xl text-center mb-16">
+          <h2 className="text-4xl font-bold tracking-tight mb-4">
+            Gasify 2.0: The Complete Crypto Super App
           </h2>
-          <p className="mt-4 text-lg text-muted-foreground">
-            Gasify provides a comprehensive suite of tools to manage your crypto transactions
-            and maximize your opportunities in the blockchain space.
+          <p className="text-xl text-slate-300">
+            From airdrops to governance, everything you need to thrive in crypto – built for Nigeria.
           </p>
         </div>
-        
-        <div className="mx-auto mt-16 max-w-5xl">
+
+        <div className="mx-auto max-w-7xl">
           <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
-            {features.map((feature) => (
-              <div
-                key={feature.name}
-                className="group relative overflow-hidden rounded-xl border bg-card p-6 shadow-sm transition-all hover:shadow-md"
-              >
-                <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-primary/10 opacity-0 transition-all duration-300 group-hover:opacity-100"></div>
-                <div className="relative z-10">
-                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <feature.icon className="h-6 w-6" />
+            {features.map((feature, index) => (
+              <Card key={feature.name} className="bg-slate-800 border-slate-700 hover:bg-slate-750 transition-all duration-300 hover:shadow-xl hover:shadow-emerald-500/10 group">
+                <CardContent className="p-8">
+                  <div className={`w-14 h-14 ${feature.color} rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300`}>
+                    <feature.icon className="h-7 w-7 text-white" />
                   </div>
-                  <h3 className="text-lg font-semibold">{feature.name}</h3>
-                  <p className="mt-2 text-sm text-muted-foreground">{feature.description}</p>
-                </div>
-              </div>
+                  <h3 className="text-xl font-bold mb-3 text-white">{feature.name}</h3>
+                  <p className="text-slate-300 leading-relaxed">{feature.description}</p>
+                </CardContent>
+              </Card>
             ))}
           </div>
         </div>

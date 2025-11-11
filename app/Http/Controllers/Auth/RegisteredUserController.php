@@ -1,26 +1,23 @@
 <?php
 
 namespace App\Http\Controllers\Auth;
-use App\Services\WalletService;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
-use Illuminate\Auth\Events\Registered;
+use App\Modules\Auth\DTOs\RegisterDto;
+use App\Modules\Auth\Services\AuthService;
+use App\Services\WalletService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rules;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class RegisteredUserController extends Controller
 {
-    protected $walletService;
-
-    public function __construct(WalletService $walletService){
-        $this->walletService = $walletService;
-    }
+    public function __construct(
+        protected AuthService $authService,
+        protected WalletService $walletService
+    ) {}
 
     /**
      * Show the registration page.
@@ -37,23 +34,14 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|lowercase|email|max:255|unique:'.User::class,
-            'password' => ['required', 'confirmed', Rules\Password::defaults()],
-        ]);
+        $dto = RegisterDto::fromRequest($request->all());
 
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-        ]);
+        $user = $this->authService->register($dto);
 
         // 🔑 initialize wallets
         $this->walletService->initializeUserWallets($user);
-        
-        event(new Registered($user));
 
+        // Login the user
         Auth::login($user);
 
         return redirect()->intended(route('dashboard', absolute: false));

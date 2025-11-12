@@ -74,28 +74,7 @@ class AuthService
             ]);
         }
 
-        if (!preg_match('/[a-z]/', $password)) {
-            throw ValidationException::withMessages([
-                'password' => ['Password must contain at least one lowercase letter.'],
-            ]);
-        }
-
-        if (!preg_match('/[A-Z]/', $password)) {
-            throw ValidationException::withMessages([
-                'password' => ['Password must contain at least one uppercase letter.'],
-            ]);
-        }
-
-        if (!preg_match('/\d/', $password)) {
-            throw ValidationException::withMessages([
-                'password' => ['Password must contain at least one number.'],
-            ]);
-        }
-
-        if (!preg_match('/[@$!%*?&]/', $password)) {
-            throw ValidationException::withMessages([
-                'password' => ['Password must contain at least one special character.'],
-            ]);
-        }
+        // TODO: Add stronger password requirements later
+        // For now, just require minimum length for smooth UX
     }
 }

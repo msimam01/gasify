@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Phone, Mail, Shield } from 'lucide-react'
 import InputError from '@/components/input-error'
+import { toast } from 'react-toastify'
+import { route } from 'ziggy-js'
 
 interface LoginProps {
     status?: string
@@ -31,15 +33,32 @@ export default function Login({ status, canResetPassword }: LoginProps) {
 
         if (loginMethod === 'email') {
             post('/login', {
-                onSuccess: () => reset('password'),
+                onSuccess: () => {
+                    reset('password')
+                    toast.success('Login successful! Welcome back to Gasify!')
+                },
+                onError: (errors) => {
+                    if (errors.email || errors.password) {
+                        toast.error('Invalid email or password')
+                    } else {
+                        toast.error('Login failed. Please try again.')
+                    }
+                }
             })
         } else {
             // Phone login - send OTP first
             post('/phone-login/send-otp', {
                 onSuccess: () => {
-                    // Reset form and switch to OTP page
                     reset('password')
+                    toast.success('OTP sent! Check your phone for login code.')
                     window.location.href = '/phone-login/otp'
+                },
+                onError: (errors) => {
+                    if (errors.phone) {
+                        toast.error('Invalid phone number or account not found')
+                    } else {
+                        toast.error('Failed to send OTP. Please try again.')
+                    }
                 }
             })
         }

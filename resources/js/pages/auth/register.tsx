@@ -11,15 +11,21 @@ import { CheckCircle, ArrowLeft, ArrowRight, User, Shield, Phone, Gift, Edit3 } 
 import InputError from '@/components/input-error'
 import { countries } from 'countries-list'
 import ReactCountryFlag from 'react-country-flag'
+import { route } from 'ziggy-js'
+import { toast } from 'react-toastify'
 
-const countryOptions = Object.entries(countries).map(([code, country], index) => ({
-    id: index + 1,
-    code: code.toUpperCase(),
-    name: country.name,
-    nativeName: country.native,
-    phoneCode: Object.values(country.phone).find(Boolean) || '',
-    continent: country.continent || '',
-}))
+const countryOptions = Object.entries(countries).map(([code, country], index) => {
+    const phoneCodes = Object.values(country.phone)
+    const phoneCode = phoneCodes.find(Boolean) as string || ''
+    return {
+        id: index + 1,
+        code: code.toUpperCase(),
+        name: country.name,
+        nativeName: country.native,
+        phoneCode,
+        continent: country.continent || '',
+    }
+})
 
 const steps = [
     { id: 1, title: 'Account', description: 'Create your account', icon: User },
@@ -38,12 +44,23 @@ interface ValidationErrors {
     city?: string
 }
 
+interface TouchedFields {
+    name?: boolean
+    email?: boolean
+    password?: boolean
+    password_confirmation?: boolean
+    phone?: boolean
+    country?: boolean
+    city?: boolean
+}
+
 export default function Register() {
     const [currentStep, setCurrentStep] = useState(1)
     const [countryId, setCountryId] = useState<number | null>(null)
     const [stateId, setStateId] = useState<number | null>(null)
     const [countryCode, setCountryCode] = useState("")
     const [validationErrors, setValidationErrors] = useState<ValidationErrors>({})
+    const [touched, setTouched] = useState<TouchedFields>({})
 
     const { data, setData, post, processing, errors } = useForm({
         name: '',
@@ -138,8 +155,16 @@ export default function Register() {
         if (currentStep === steps.length) {
             post('/register', {
                 onSuccess: () => {
+                    toast.success('Account created successfully! Welcome to Gasify!')
                     // Success handled by redirect
                 },
+                onError: (errors) => {
+                    if (errors.email) {
+                        toast.error('This email is already registered')
+                    } else {
+                        toast.error('Failed to create account. Please try again.')
+                    }
+                }
             })
         } else {
             handleNext()
@@ -215,14 +240,15 @@ export default function Register() {
                                     type="text"
                                     value={data.name}
                                     onChange={(e) => setData('name', e.target.value)}
+                                    onBlur={() => setTouched(prev => ({ ...prev, name: true }))}
                                     className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
-                                        validationErrors.name ? 'border-red-500' : data.name && !validationErrors.name ? 'border-green-500' : ''
+                                        touched.name && validationErrors.name ? 'border-red-500' : touched.name && data.name && !validationErrors.name ? 'border-green-500' : ''
                                     }`}
                                     placeholder="John Doe"
                                     required
                                     autoFocus
                                 />
-                                <InputError message={validationErrors.name || errors.name} />
+                                <InputError message={touched.name && (validationErrors.name || errors.name)} />
                             </div>
 
                             <div>
@@ -232,13 +258,14 @@ export default function Register() {
                                     type="email"
                                     value={data.email}
                                     onChange={(e) => setData('email', e.target.value)}
+                                    onBlur={() => setTouched(prev => ({ ...prev, email: true }))}
                                     className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
-                                        validationErrors.email ? 'border-red-500' : data.email && !validationErrors.email ? 'border-green-500' : ''
+                                        touched.email && validationErrors.email ? 'border-red-500' : touched.email && data.email && !validationErrors.email ? 'border-green-500' : ''
                                     }`}
                                     placeholder="your@email.com"
                                     required
                                 />
-                                <InputError message={validationErrors.email || errors.email} />
+                                <InputError message={touched.email && (validationErrors.email || errors.email)} />
                             </div>
                         </div>
                     </div>
@@ -259,13 +286,14 @@ export default function Register() {
                                     type="password"
                                     value={data.password}
                                     onChange={(e) => setData('password', e.target.value)}
+                                    onBlur={() => setTouched(prev => ({ ...prev, password: true }))}
                                     className={`bg-slate-700 border-slate-600 text-white ${
-                                        validationErrors.password ? 'border-red-500' : data.password && !validationErrors.password ? 'border-green-500' : ''
+                                        touched.password && validationErrors.password ? 'border-red-500' : touched.password && data.password && !validationErrors.password ? 'border-green-500' : ''
                                     }`}
                                     placeholder="Create a strong password"
                                     required
                                 />
-                                <InputError message={validationErrors.password || errors.password} />
+                                <InputError message={touched.password && (validationErrors.password || errors.password)} />
                                 <div className="text-xs text-slate-500 mt-1 space-y-1">
                                     <p>Password must contain:</p>
                                     <ul className="list-disc list-inside ml-2">
@@ -284,15 +312,16 @@ export default function Register() {
                                     type="password"
                                     value={data.password_confirmation}
                                     onChange={(e) => setData('password_confirmation', e.target.value)}
+                                    onBlur={() => setTouched(prev => ({ ...prev, password_confirmation: true }))}
                                     className={`bg-slate-700 border-slate-600 text-white ${
-                                        validationErrors.password_confirmation ? 'border-red-500' :
-                                        data.password_confirmation && data.password === data.password_confirmation ? 'border-green-500' : ''
+                                        touched.password_confirmation && validationErrors.password_confirmation ? 'border-red-500' :
+                                        touched.password_confirmation && data.password_confirmation && data.password === data.password_confirmation ? 'border-green-500' : ''
                                     }`}
                                     placeholder="Confirm your password"
                                     required
                                 />
-                                <InputError message={validationErrors.password_confirmation} />
-                                {data.password_confirmation && data.password === data.password_confirmation && (
+                                <InputError message={touched.password_confirmation && validationErrors.password_confirmation} />
+                                {touched.password_confirmation && data.password_confirmation && data.password === data.password_confirmation && (
                                     <p className="text-xs text-green-400 mt-1">✓ Passwords match</p>
                                 )}
                             </div>
@@ -313,13 +342,14 @@ export default function Register() {
                                     <Label htmlFor="country" className="text-slate-300">Country *</Label>
                                     <Select
                                         value={countryId?.toString() || ''}
-                                        onValueChange={(value) => {
-                                            const selectedCountry = countryOptions.find(c => c.id.toString() === value)
-                                            setCountryId(selectedCountry ? selectedCountry.id : null)
-                                            setData('country', selectedCountry ? selectedCountry.name : '')
-                                            setData('city', '')
-                                            setCountryCode(selectedCountry ? selectedCountry.phoneCode : '')
-                                        }}
+                                onValueChange={(value) => {
+                                    const selectedCountry = countryOptions.find(c => c.id.toString() === value)
+                                    setCountryId(selectedCountry ? selectedCountry.id : null)
+                                    setData('country', selectedCountry ? selectedCountry.name : '')
+                                    setTouched(prev => ({ ...prev, country: true, city: false, phone: false }))
+                                    setData('city', '')
+                                    setCountryCode(selectedCountry ? selectedCountry.phoneCode : '')
+                                }}
                                     >
                                         <SelectTrigger className={`bg-slate-700 border-slate-600 text-white ${
                                             validationErrors.country ? 'border-red-500' : data.country && !validationErrors.country ? 'border-green-500' : ''
@@ -348,13 +378,14 @@ export default function Register() {
                                         type="text"
                                         value={data.city}
                                         onChange={(e) => setData('city', e.target.value)}
+                                        onBlur={() => setTouched(prev => ({ ...prev, city: true }))}
                                         className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
-                                            validationErrors.city ? 'border-red-500' : data.city && !validationErrors.city ? 'border-green-500' : ''
+                                            touched.city && validationErrors.city ? 'border-red-500' : touched.city && data.city && !validationErrors.city ? 'border-green-500' : ''
                                         }`}
                                         placeholder="Enter your city"
                                         required
                                     />
-                                    <InputError message={validationErrors.city} />
+                                    <InputError message={touched.city && validationErrors.city} />
                                 </div>
                             </div>
 
@@ -369,14 +400,15 @@ export default function Register() {
                                         type="tel"
                                         value={data.phone}
                                         onChange={(e) => setData('phone', e.target.value)}
+                                        onBlur={() => setTouched(prev => ({ ...prev, phone: true }))}
                                         className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 flex-1 ${
-                                            validationErrors.phone ? 'border-red-500' : data.phone && !validationErrors.phone ? 'border-green-500' : ''
+                                            touched.phone && validationErrors.phone ? 'border-red-500' : touched.phone && data.phone && !validationErrors.phone ? 'border-green-500' : ''
                                         }`}
                                         placeholder="XXX XXX XXXX"
                                         required
                                     />
                                 </div>
-                                <InputError message={validationErrors.phone || errors.phone} />
+                                <InputError message={touched.phone && (validationErrors.phone || errors.phone)} />
                                 <p className="text-xs text-slate-500 mt-1">
                                     We'll send OTP verification to this number
                                 </p>

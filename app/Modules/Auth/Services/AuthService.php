@@ -47,17 +47,26 @@ class AuthService
 
     public function login(LoginDto $dto): bool
     {
-        $credentials = [
-            'email' => $dto->email,
-            'password' => $dto->password,
-        ];
+        // Prepare credentials based on login method
+        $credentials = ['password' => $dto->password];
+
+        if ($dto->isEmailLogin()) {
+            $credentials['email'] = $dto->email;
+        } elseif ($dto->isPhoneLogin()) {
+            $credentials['phone'] = $dto->phone;
+        } else {
+            throw ValidationException::withMessages([
+                'email' => ['Please provide an email or phone number.'],
+            ]);
+        }
 
         if (Auth::attempt($credentials, $dto->remember)) {
             return true;
         }
 
+        $field = $dto->isEmailLogin() ? 'email' : 'phone';
         throw ValidationException::withMessages([
-            'email' => ['The provided credentials are incorrect.'],
+            $field => ['The provided credentials are incorrect.'],
         ]);
     }
 

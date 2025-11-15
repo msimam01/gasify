@@ -12,8 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->string('provider')->nullable()->after('phone');
+            $table->string('provider')->nullable()->after('email');
             $table->string('provider_id')->nullable()->after('provider');
+            $table->index(['provider', 'provider_id']);
         });
     }
 
@@ -23,6 +24,7 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('users', function (Blueprint $table) {
+            $table->dropIndex(['provider', 'provider_id']);
             $table->dropColumn(['provider', 'provider_id']);
         });
     }

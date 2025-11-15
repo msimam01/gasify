@@ -47,5 +47,16 @@ return [
         'network' => env('SOLANA_NETWORK', 'devnet'),
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . env('GOOGLE_REDIRECT_URI'),
+    ],
+
+    'x' => [
+        'client_id' => env('X_CLIENT_ID'),
+        'client_secret' => env('X_CLIENT_SECRET'),
+        'redirect' => env('APP_URL') . env('X_REDIRECT_URI'),
+    ],
 
 ];

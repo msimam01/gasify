@@ -28,9 +28,21 @@ export default function Login({ status, canResetPassword }: LoginProps) {
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault()
-        post('/login', {
-            onSuccess: () => reset('password'),
-        })
+
+        if (loginMethod === 'email') {
+            post('/login', {
+                onSuccess: () => reset('password'),
+            })
+        } else {
+            // Phone login - send OTP first
+            post('/phone-login/send-otp', {
+                onSuccess: () => {
+                    // Reset form and switch to OTP page
+                    reset('password')
+                    window.location.href = '/phone-login/otp'
+                }
+            })
+        }
     }
 
     return (
@@ -72,6 +84,19 @@ export default function Login({ status, canResetPassword }: LoginProps) {
                                     />
                                     <InputError message={errors.email} />
                                 </div>
+
+                                <div>
+                                    <Label htmlFor="password" className="text-slate-300">Password</Label>
+                                    <Input
+                                        id="password"
+                                        type="password"
+                                        value={data.password}
+                                        onChange={(e) => setData('password', e.target.value)}
+                                        className="bg-slate-700 border-slate-600 text-white"
+                                        required
+                                    />
+                                    <InputError message={errors.password} />
+                                </div>
                             </TabsContent>
 
                             <TabsContent value="phone" className="space-y-4 mt-0">
@@ -88,20 +113,17 @@ export default function Login({ status, canResetPassword }: LoginProps) {
                                     />
                                     <InputError message={errors.phone} />
                                 </div>
-                            </TabsContent>
 
-                            <div>
-                                <Label htmlFor="password" className="text-slate-300">Password</Label>
-                                <Input
-                                    id="password"
-                                    type="password"
-                                    value={data.password}
-                                    onChange={(e) => setData('password', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white"
-                                    required
-                                />
-                                <InputError message={errors.password} />
-                            </div>
+                                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4">
+                                    <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                                        <Phone className="w-4 h-4" />
+                                        <span className="font-medium">Phone Verification</span>
+                                    </div>
+                                    <p className="text-sm text-slate-300">
+                                        We'll send a 6-digit OTP code to your phone number for verification.
+                                    </p>
+                                </div>
+                            </TabsContent>
 
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center space-x-2">
@@ -141,6 +163,25 @@ export default function Login({ status, canResetPassword }: LoginProps) {
                                     {status}
                                 </div>
                             )}
+
+                            {/* Social Login Buttons */}
+                            <div className="mt-6 space-y-3">
+                                <a
+                                    href={route('social.redirect', 'google')}
+                                    className="flex items-center justify-center w-full gap-3 px-4 py-3 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                                >
+                                    <img src="/icons/google.svg" alt="Google" className="w-5 h-5" />
+                                    Continue with Google
+                                </a>
+
+                                <a
+                                    href={route('social.redirect', 'x')}
+                                    className="flex items-center justify-center w-full gap-3 px-4 py-3 text-sm font-medium text-white bg-black rounded-lg hover:bg-gray-800"
+                                >
+                                    <img src="/icons/x.svg" alt="X" className="w-5 h-5" />
+                                    Continue with X
+                                </a>
+                            </div>
 
                             {/* USSD Fallback */}
                             <div className="text-center">

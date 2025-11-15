@@ -28,8 +28,22 @@ Route::middleware(['auth', 'verified'])->group(function () {
 require __DIR__.'/settings.php';
 require __DIR__.'/auth.php';
 
-// Social Login Routes (requires Laravel Socialite)
-// Route::get('/auth/google', [App\Http\Controllers\Auth\SocialController::class, 'redirectToGoogle'])->name('auth.google');
-// Route::get('/auth/google/callback', [App\Http\Controllers\Auth\SocialController::class, 'handleGoogleCallback']);
-// Route::get('/auth/x', [App\Http\Controllers\Auth\SocialController::class, 'redirectToX'])->name('auth.x');
-// Route::get('/auth/x/callback', [App\Http\Controllers\Auth\SocialController::class, 'handleXCallback']);
+// Phone Login Routes
+Route::middleware('guest')->group(function () {
+    Route::post('/phone-login/send-otp', [App\Http\Controllers\Auth\PhoneLoginController::class, 'sendOtp'])
+        ->name('phone.login.send-otp');
+    Route::post('/phone-login/verify-otp', [App\Http\Controllers\Auth\PhoneLoginController::class, 'verifyOtp'])
+        ->name('phone.login.verify-otp');
+    Route::get('/phone-login/otp', [App\Http\Controllers\Auth\PhoneLoginController::class, 'showOtpForm'])
+        ->name('phone.login.otp');
+});
+
+use App\Http\Controllers\Auth\SocialAuthController;
+
+Route::get('/auth/{provider}', [SocialAuthController::class, 'redirect'])
+    ->where('provider', 'google|x')
+    ->name('social.redirect');
+
+Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'])
+    ->where('provider', 'google|x')
+    ->name('social.callback');

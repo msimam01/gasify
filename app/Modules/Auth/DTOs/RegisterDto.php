@@ -8,6 +8,8 @@ class RegisterDto
         public string $name,
         public string $email,
         public string $phone,
+        public string $country,
+        public string $city,
         public string $password,
         public string $password_confirmation
     ) {}
@@ -18,6 +20,8 @@ class RegisterDto
             name: $data['name'],
             email: strtolower($data['email']),
             phone: $data['phone'],
+            country: $data['country'],
+            city: $data['city'],
             password: $data['password'],
             password_confirmation: $data['password_confirmation']
         );
@@ -29,6 +33,8 @@ class RegisterDto
             'name' => $this->name,
             'email' => $this->email,
             'phone' => $this->phone,
+            'country' => $this->country,
+            'city' => $this->city,
             'password' => $this->password,
             'password_confirmation' => $this->password_confirmation,
         ];

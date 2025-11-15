@@ -1,23 +1,49 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Head, Link, useForm } from '@inertiajs/react'
 import { AuthLayout } from '@/components/auth/auth-layout'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Progress } from '@/components/ui/progress'
-import { CheckCircle, ArrowLeft, ArrowRight, User, Shield, Phone, Gift } from 'lucide-react'
+import { CheckCircle, ArrowLeft, ArrowRight, User, Shield, Phone, Gift, Edit3 } from 'lucide-react'
 import InputError from '@/components/input-error'
+import { countries } from 'countries-list'
+import ReactCountryFlag from 'react-country-flag'
+
+const countryOptions = Object.entries(countries).map(([code, country], index) => ({
+    id: index + 1,
+    code: code.toUpperCase(),
+    name: country.name,
+    nativeName: country.native,
+    phoneCode: Object.values(country.phone).find(Boolean) || '',
+    continent: country.continent || '',
+}))
 
 const steps = [
     { id: 1, title: 'Account', description: 'Create your account', icon: User },
     { id: 2, title: 'Security', description: 'Secure your account', icon: Shield },
-    { id: 3, title: 'Contact', description: 'Verify your identity', icon: Phone },
+    { id: 3, title: 'Location', description: 'Your location & contact', icon: Phone },
     { id: 4, title: 'Complete', description: 'Welcome to Gasify!', icon: Gift }
 ]
 
+interface ValidationErrors {
+    name?: string
+    email?: string
+    password?: string
+    password_confirmation?: string
+    phone?: string
+    country?: string
+    city?: string
+}
+
 export default function Register() {
     const [currentStep, setCurrentStep] = useState(1)
+    const [countryId, setCountryId] = useState<number | null>(null)
+    const [stateId, setStateId] = useState<number | null>(null)
+    const [countryCode, setCountryCode] = useState("")
+    const [validationErrors, setValidationErrors] = useState<ValidationErrors>({})
 
     const { data, setData, post, processing, errors } = useForm({
         name: '',
@@ -25,10 +51,78 @@ export default function Register() {
         password: '',
         password_confirmation: '',
         phone: '',
+        country: '',
+        city: '',
     })
 
+    // Real-time validation
+    useEffect(() => {
+        const errors: ValidationErrors = {}
+
+        // Step 1 validations
+        if (currentStep >= 1) {
+            if (!data.name.trim()) {
+                errors.name = 'Full name is required'
+            } else if (data.name.trim().length < 2) {
+                errors.name = 'Name must be at least 2 characters'
+            }
+
+            if (!data.email.trim()) {
+                errors.email = 'Email is required'
+            } else if (!/\S+@\S+\.\S+/.test(data.email)) {
+                errors.email = 'Please enter a valid email address'
+            }
+        }
+
+        // Step 2 validations
+        if (currentStep >= 2) {
+            if (!data.password) {
+                errors.password = 'Password is required'
+            } else if (data.password.length < 8) {
+                errors.password = 'Password must be at least 8 characters'
+            } else if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(data.password)) {
+                errors.password = 'Password must contain uppercase, lowercase, and number'
+            }
+
+            if (!data.password_confirmation) {
+                errors.password_confirmation = 'Please confirm your password'
+            } else if (data.password !== data.password_confirmation) {
+                errors.password_confirmation = 'Passwords do not match'
+            }
+        }
+
+        // Step 3 validations
+        if (currentStep >= 3) {
+            if (!countryId) {
+                errors.country = 'Please select your country'
+            }
+
+            if (!data.city.trim()) {
+                errors.city = 'City is required'
+            }
+
+            if (!data.phone.trim()) {
+                errors.phone = 'Phone number is required'
+            } else if (!/^\+?[\d\s-()]{10,}$/.test(data.phone.replace(/\s/g, ''))) {
+                errors.phone = 'Please enter a valid phone number'
+            }
+        }
+
+        setValidationErrors(errors)
+    }, [data, currentStep, countryId])
+
     const handleNext = () => {
-        if (currentStep < steps.length) {
+        // Check if current step has validation errors
+        const currentStepErrors = Object.keys(validationErrors).filter(key => {
+            switch (currentStep) {
+                case 1: return ['name', 'email'].includes(key)
+                case 2: return ['password', 'password_confirmation'].includes(key)
+                case 3: return ['country', 'city', 'phone'].includes(key)
+                default: return false
+            }
+        })
+
+        if (currentStepErrors.length === 0 && currentStep < steps.length) {
             setCurrentStep(currentStep + 1)
         }
     }
@@ -54,6 +148,16 @@ export default function Register() {
 
     const progress = ((currentStep - 1) / (steps.length - 1)) * 100
 
+    const isStepValid = () => {
+        switch (currentStep) {
+            case 1: return !validationErrors.name && !validationErrors.email
+            case 2: return !validationErrors.password && !validationErrors.password_confirmation
+            case 3: return !validationErrors.country && !validationErrors.city && !validationErrors.phone
+            case 4: return true
+            default: return false
+        }
+    }
+
     const renderStepContent = () => {
         switch (currentStep) {
             case 1:
@@ -64,34 +168,77 @@ export default function Register() {
                             <p className="text-slate-400">Start your secure crypto journey</p>
                         </div>
 
+                        {/* Social Login Options */}
+                        <div className="space-y-4">
+                            <div className="relative">
+                                <div className="absolute inset-0 flex items-center">
+                                    <span className="w-full border-t border-slate-600" />
+                                </div>
+                                <div className="relative flex justify-center text-xs uppercase">
+                                    <span className="bg-slate-800 px-2 text-slate-400">Or continue with</span>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <a
+                                    href={route('social.redirect', 'google')}
+                                    className="flex items-center justify-center gap-3 px-4 py-3 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                                >
+                                    <img src="/icons/google.svg" alt="Google" className="w-5 h-5" />
+                                    Google
+                                </a>
+
+                                <a
+                                    href={route('social.redirect', 'x')}
+                                    className="flex items-center justify-center gap-3 px-4 py-3 text-sm font-medium text-white bg-black rounded-lg hover:bg-gray-800"
+                                >
+                                    <img src="/icons/x.svg" alt="X" className="w-5 h-5" />
+                                    X
+                                </a>
+                            </div>
+                        </div>
+
+                        <div className="relative">
+                            <div className="absolute inset-0 flex items-center">
+                                <span className="w-full border-t border-slate-600" />
+                            </div>
+                            <div className="relative flex justify-center text-xs uppercase">
+                                <span className="bg-slate-800 px-2 text-slate-400">Create with email</span>
+                            </div>
+                        </div>
+
                         <div className="space-y-4">
                             <div>
-                                <Label htmlFor="name" className="text-slate-300">Full Name</Label>
+                                <Label htmlFor="name" className="text-slate-300">Full Name *</Label>
                                 <Input
                                     id="name"
                                     type="text"
                                     value={data.name}
                                     onChange={(e) => setData('name', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
+                                    className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
+                                        validationErrors.name ? 'border-red-500' : data.name && !validationErrors.name ? 'border-green-500' : ''
+                                    }`}
                                     placeholder="John Doe"
                                     required
                                     autoFocus
                                 />
-                                <InputError message={errors.name} />
+                                <InputError message={validationErrors.name || errors.name} />
                             </div>
 
                             <div>
-                                <Label htmlFor="email" className="text-slate-300">Email Address</Label>
+                                <Label htmlFor="email" className="text-slate-300">Email Address *</Label>
                                 <Input
                                     id="email"
                                     type="email"
                                     value={data.email}
                                     onChange={(e) => setData('email', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
+                                    className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
+                                        validationErrors.email ? 'border-red-500' : data.email && !validationErrors.email ? 'border-green-500' : ''
+                                    }`}
                                     placeholder="your@email.com"
                                     required
                                 />
-                                <InputError message={errors.email} />
+                                <InputError message={validationErrors.email || errors.email} />
                             </div>
                         </div>
                     </div>
@@ -106,34 +253,48 @@ export default function Register() {
 
                         <div className="space-y-4">
                             <div>
-                                <Label htmlFor="password" className="text-slate-300">Password</Label>
+                                <Label htmlFor="password" className="text-slate-300">Password *</Label>
                                 <Input
                                     id="password"
                                     type="password"
                                     value={data.password}
                                     onChange={(e) => setData('password', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white"
+                                    className={`bg-slate-700 border-slate-600 text-white ${
+                                        validationErrors.password ? 'border-red-500' : data.password && !validationErrors.password ? 'border-green-500' : ''
+                                    }`}
                                     placeholder="Create a strong password"
                                     required
                                 />
-                                <InputError message={errors.password} />
-                                <p className="text-xs text-slate-500 mt-1">
-                                    Must be at least 8 characters long
-                                </p>
+                                <InputError message={validationErrors.password || errors.password} />
+                                <div className="text-xs text-slate-500 mt-1 space-y-1">
+                                    <p>Password must contain:</p>
+                                    <ul className="list-disc list-inside ml-2">
+                                        <li className={data.password.length >= 8 ? 'text-green-400' : ''}>At least 8 characters</li>
+                                        <li className={/(?=.*[a-z])/.test(data.password) ? 'text-green-400' : ''}>One lowercase letter</li>
+                                        <li className={/(?=.*[A-Z])/.test(data.password) ? 'text-green-400' : ''}>One uppercase letter</li>
+                                        <li className={/(?=.*\d)/.test(data.password) ? 'text-green-400' : ''}>One number</li>
+                                    </ul>
+                                </div>
                             </div>
 
                             <div>
-                                <Label htmlFor="password_confirmation" className="text-slate-300">Confirm Password</Label>
+                                <Label htmlFor="password_confirmation" className="text-slate-300">Confirm Password *</Label>
                                 <Input
                                     id="password_confirmation"
                                     type="password"
                                     value={data.password_confirmation}
                                     onChange={(e) => setData('password_confirmation', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white"
+                                    className={`bg-slate-700 border-slate-600 text-white ${
+                                        validationErrors.password_confirmation ? 'border-red-500' :
+                                        data.password_confirmation && data.password === data.password_confirmation ? 'border-green-500' : ''
+                                    }`}
                                     placeholder="Confirm your password"
                                     required
                                 />
-                                <InputError message={errors.password_confirmation} />
+                                <InputError message={validationErrors.password_confirmation} />
+                                {data.password_confirmation && data.password === data.password_confirmation && (
+                                    <p className="text-xs text-green-400 mt-1">✓ Passwords match</p>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -142,23 +303,80 @@ export default function Register() {
                 return (
                     <div className="space-y-6">
                         <div className="text-center mb-6">
-                            <h3 className="text-xl font-semibold text-white mb-2">Contact Information</h3>
-                            <p className="text-slate-400">We'll use this to secure your account</p>
+                            <h3 className="text-xl font-semibold text-white mb-2">Location & Contact</h3>
+                            <p className="text-slate-400">Tell us about yourself for account verification</p>
                         </div>
 
                         <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <Label htmlFor="country" className="text-slate-300">Country *</Label>
+                                    <Select
+                                        value={countryId?.toString() || ''}
+                                        onValueChange={(value) => {
+                                            const selectedCountry = countryOptions.find(c => c.id.toString() === value)
+                                            setCountryId(selectedCountry ? selectedCountry.id : null)
+                                            setData('country', selectedCountry ? selectedCountry.name : '')
+                                            setData('city', '')
+                                            setCountryCode(selectedCountry ? selectedCountry.phoneCode : '')
+                                        }}
+                                    >
+                                        <SelectTrigger className={`bg-slate-700 border-slate-600 text-white ${
+                                            validationErrors.country ? 'border-red-500' : data.country && !validationErrors.country ? 'border-green-500' : ''
+                                        }`}>
+                                            <SelectValue placeholder="Select your country" />
+                                        </SelectTrigger>
+                                        <SelectContent className="bg-slate-800 border-slate-600">
+                                            {countryOptions.map((country) => (
+                                                <SelectItem key={country.id} value={country.id.toString()} className="text-white hover:bg-slate-700">
+                                                    <div className="flex items-center gap-2">
+                                                        <ReactCountryFlag countryCode={country.code} svg className="w-5 h-4" />
+                                                        <span>{country.name}</span>
+                                                        <span className="text-slate-400">(+{country.phoneCode})</span>
+                                                    </div>
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <InputError message={validationErrors.country} />
+                                </div>
+
+                                <div>
+                                    <Label htmlFor="city" className="text-slate-300">City *</Label>
+                                    <Input
+                                        id="city"
+                                        type="text"
+                                        value={data.city}
+                                        onChange={(e) => setData('city', e.target.value)}
+                                        className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 ${
+                                            validationErrors.city ? 'border-red-500' : data.city && !validationErrors.city ? 'border-green-500' : ''
+                                        }`}
+                                        placeholder="Enter your city"
+                                        required
+                                    />
+                                    <InputError message={validationErrors.city} />
+                                </div>
+                            </div>
+
                             <div>
-                                <Label htmlFor="phone" className="text-slate-300">Phone Number</Label>
-                                <Input
-                                    id="phone"
-                                    type="tel"
-                                    value={data.phone}
-                                    onChange={(e) => setData('phone', e.target.value)}
-                                    className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
-                                    placeholder="+234 xxx xxx xxxx"
-                                    required
-                                />
-                                <InputError message={errors.phone} />
+                                <Label htmlFor="phone" className="text-slate-300">Phone Number *</Label>
+                                <div className="flex gap-2">
+                                    <div className="flex items-center px-3 bg-slate-700 border border-slate-600 rounded-md">
+                                        <span className="text-white">+{countryCode}</span>
+                                    </div>
+                                    <Input
+                                        id="phone"
+                                        type="tel"
+                                        value={data.phone}
+                                        onChange={(e) => setData('phone', e.target.value)}
+                                        className={`bg-slate-700 border-slate-600 text-white placeholder-slate-400 flex-1 ${
+                                            validationErrors.phone ? 'border-red-500' : data.phone && !validationErrors.phone ? 'border-green-500' : ''
+                                        }`}
+                                        placeholder="XXX XXX XXXX"
+                                        required
+                                    />
+                                </div>
+                                <InputError message={validationErrors.phone || errors.phone} />
                                 <p className="text-xs text-slate-500 mt-1">
                                     We'll send OTP verification to this number
                                 </p>
@@ -255,8 +473,10 @@ export default function Register() {
 
                                 <Button
                                     type="submit"
-                                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    disabled={processing}
+                                    className={`flex-1 bg-emerald-600 hover:bg-emerald-700 text-white ${
+                                        !isStepValid() ? 'opacity-50 cursor-not-allowed' : ''
+                                    }`}
+                                    disabled={processing || !isStepValid()}
                                 >
                                     {processing ? 'Processing...' : 'Continue'}
                                     <ArrowRight className="w-4 h-4 ml-2" />
@@ -265,13 +485,27 @@ export default function Register() {
                         )}
 
                         {currentStep === steps.length && (
-                            <Button
-                                type="submit"
-                                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3"
-                                disabled={processing}
-                            >
-                                {processing ? 'Creating Account...' : 'Create My Account'}
-                            </Button>
+                            <div className="space-y-4">
+                                <div className="flex gap-4">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setCurrentStep(3)}
+                                        className="flex-1 border-slate-600 text-slate-300 hover:bg-slate-700"
+                                    >
+                                        <Edit3 className="w-4 h-4 mr-2" />
+                                        Edit Info
+                                    </Button>
+
+                                    <Button
+                                        type="submit"
+                                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3"
+                                        disabled={processing}
+                                    >
+                                        {processing ? 'Creating Account...' : 'Create My Account'}
+                                    </Button>
+                                </div>
+                            </div>
                         )}
                     </form>
 

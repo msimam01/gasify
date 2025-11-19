@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import ConnectWallet from '@/components/ConnectWallet';
 import {
   IconEye,
   IconEyeOff,
@@ -524,36 +525,55 @@ export default function WalletIndex({ balances, wallets, recentTransactions }: P
                 </TabsContent>
 
                 <TabsContent value="connected" className="mt-6">
-                  <Card className="border-2 border-dashed">
-                    <CardContent className="pt-12 pb-12 text-center">
-                      <div className="mx-auto h-20 w-20 bg-gradient-to-br from-emerald-100 to-green-100 rounded-full flex items-center justify-center mb-6">
-                        <IconShield className="h-10 w-10 text-emerald-600" />
-                      </div>
-                      <h3 className="text-2xl font-bold mb-3">Connect Your External Wallet</h3>
-                      <p className="text-muted-foreground mb-2 max-w-md mx-auto">
-                        Connect Phantom, Trust Wallet, MetaMask, or any WalletConnect-compatible wallet
-                        to trade P2P, stake, or use dApps seamlessly.
-                      </p>
-                      <p className="text-sm text-muted-foreground mb-8 max-w-md mx-auto">
-                        Your keys, your crypto—we never custody your connected wallets.
-                      </p>
-                      <Button size="lg" className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-6 px-8 shadow-lg shadow-emerald-600/20">
-                        <IconWallet className="mr-2 h-5 w-5" />
-                        Connect Wallet
-                      </Button>
+                  <div className="space-y-4">
+                    {wallets.length > 0 ? (
+                      <Card className="border-2 border-dashed">
+                        <CardContent className="pt-12 pb-12 text-center">
+                          <div className="mx-auto h-20 w-20 bg-gradient-to-br from-emerald-100 to-green-100 rounded-full flex items-center justify-center mb-6">
+                            <IconShield className="h-10 w-10 text-emerald-600" />
+                          </div>
+                          <h3 className="text-2xl font-bold mb-3">Connect Your External Wallet</h3>
+                          <p className="text-muted-foreground mb-2 max-w-md mx-auto">
+                            Connect Phantom, Trust Wallet, MetaMask, or any WalletConnect-compatible wallet
+                            to trade P2P, stake, or use dApps seamlessly.
+                          </p>
+                          <p className="text-sm text-muted-foreground mb-8 max-w-md mx-auto">
+                            Your keys, your crypto—we never custody your connected wallets.
+                          </p>
+                          <ConnectWallet />
 
-                      <div className="mt-8 pt-8 border-t">
-                        <p className="text-xs text-muted-foreground mb-4">Popular wallet providers</p>
-                        <div className="flex justify-center gap-4 flex-wrap">
-                          {['Phantom', 'MetaMask', 'Trust Wallet', 'Coinbase'].map((wallet) => (
-                            <div key={wallet} className="px-4 py-2 bg-gray-50 rounded-full text-sm font-medium text-gray-700">
-                              {wallet}
+                          <div className="mt-8 pt-8 border-t">
+                            <p className="text-xs text-muted-foreground mb-4">Popular wallet providers</p>
+                            <div className="flex justify-center gap-4 flex-wrap">
+                              {['Phantom', 'MetaMask', 'Trust Wallet', 'Coinbase'].map((wallet) => (
+                                <div key={wallet} className="px-4 py-2 bg-gray-50 rounded-full text-sm font-medium text-gray-700">
+                                  {wallet}
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ) : (
+                      <Card className="border-2 border-dashed">
+                        <CardContent className="pt-12 pb-12 text-center">
+                          <div className="mx-auto h-20 w-20 bg-gradient-to-br from-emerald-100 to-green-100 rounded-full flex items-center justify-center mb-6">
+                            <IconShield className="h-10 w-10 text-emerald-600" />
+                          </div>
+                          <h3 className="text-2xl font-bold mb-3">Create Your First Wallet</h3>
+                          <p className="text-muted-foreground mb-2 max-w-md mx-auto">
+                            Start by creating a Gasify wallet, then connect external wallets for P2P trading.
+                          </p>
+                          <Button asChild size="lg" className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-6 px-8 shadow-lg shadow-emerald-600/20">
+                            <a href="/wallet/create">
+                              <IconWallet className="mr-2 h-5 w-5" />
+                              Create Gasify Wallet
+                            </a>
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>

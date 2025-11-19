@@ -9,7 +9,18 @@ import { initializeTheme } from './hooks/use-appearance';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+// WalletConnect imports
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { WagmiProvider } from 'wagmi';
+import { AppKitProvider } from '@reown/appkit/react';
+import { mainnet, polygon, solana } from '@reown/appkit/networks';
+import { wagmiAdapter } from './lib/appkit-init';
+import { projectId, metadata } from './lib/walletconnect';
+
+const appName = import.meta.env.VITE_APP_NAME || 'Gasify';
+
+// WalletConnect setup
+const queryClient = new QueryClient();
 
 createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),
@@ -27,22 +38,41 @@ createInertiaApp({
             window.route = route;
         }
 
+        // AppKit with AppKitProvider
         root.render(
-            <>
-                <App {...props} />
-                <ToastContainer
-                    position="top-right"
-                    autoClose={5000}
-                    hideProgressBar={false}
-                    newestOnTop={false}
-                    closeOnClick
-                    rtl={false}
-                    pauseOnFocusLoss
-                    draggable
-                    pauseOnHover
-                    theme="dark"
-                />
-            </>
+            <AppKitProvider 
+                projectId={projectId}
+                networks={[mainnet, polygon, solana]}
+                metadata={metadata}
+                features={{
+                    analytics: false,
+                    email: false,
+                    socials: [],
+                    emailShowWallets: false
+                }}
+                themeMode="light"
+                themeVariables={{
+                    '--w3m-z-index': '999'
+                }}
+            >
+                <WagmiProvider config={wagmiAdapter.wagmiConfig}>
+                    <QueryClientProvider client={queryClient}>
+                        <App {...props} />
+                        <ToastContainer
+                            position="top-right"
+                            autoClose={5000}
+                            hideProgressBar={false}
+                            newestOnTop={false}
+                            closeOnClick
+                            rtl={false}
+                            pauseOnFocusLoss
+                            draggable
+                            pauseOnHover
+                            theme="dark"
+                        />
+                    </QueryClientProvider>
+                </WagmiProvider>
+            </AppKitProvider>
         );
     },
     progress: {

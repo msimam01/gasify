@@ -1,26 +1,32 @@
 import '../css/app.css';
 import { Ziggy } from './ziggy';
 import { route } from 'ziggy-js';
-
 import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createRoot } from 'react-dom/client';
 import { initializeTheme } from './hooks/use-appearance';
-import { ToastContainer } from 'react-toastify';
+import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
-// WalletConnect imports
+// Wallet and Web3 providers
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
-import { AppKitProvider } from '@reown/appkit/react';
-import { mainnet, polygon, solana } from '@reown/appkit/networks';
-import { wagmiAdapter } from './lib/appkit-init';
-import { projectId, metadata } from './lib/walletconnect';
+import { wagmiConfig } from './lib/walletconnect';
+
+// Import walletconnect to initialize AppKit (this triggers the global initialization)
+import './lib/walletconnect';
+
+// Initialize query client with network error handling
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 const appName = import.meta.env.VITE_APP_NAME || 'Gasify';
-
-// WalletConnect setup
-const queryClient = new QueryClient();
 
 createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),
@@ -32,47 +38,32 @@ createInertiaApp({
     setup({ el, App, props }) {
         const root = createRoot(el);
 
-        // Make Ziggy and route available globally
+        // Initialize theme before rendering the app
+        initializeTheme();
+
         if (typeof window !== 'undefined') {
             window.Ziggy = Ziggy;
             window.route = route;
         }
 
-        // AppKit with AppKitProvider
-        root.render(
-            <AppKitProvider 
-                projectId={projectId}
-                networks={[mainnet, polygon, solana]}
-                metadata={metadata}
-                features={{
-                    analytics: false,
-                    email: false,
-                    socials: [],
-                    emailShowWallets: false
-                }}
-                themeMode="light"
-                themeVariables={{
-                    '--w3m-z-index': '999'
-                }}
-            >
-                <WagmiProvider config={wagmiAdapter.wagmiConfig}>
-                    <QueryClientProvider client={queryClient}>
-                        <App {...props} />
-                        <ToastContainer
-                            position="top-right"
-                            autoClose={5000}
-                            hideProgressBar={false}
-                            newestOnTop={false}
-                            closeOnClick
-                            rtl={false}
-                            pauseOnFocusLoss
-                            draggable
-                            pauseOnHover
-                            theme="dark"
-                        />
-                    </QueryClientProvider>
-                </WagmiProvider>
-            </AppKitProvider>
+        return root.render(
+            <WagmiProvider config={wagmiConfig}>
+                <QueryClientProvider client={queryClient}>
+                    <App {...props} />
+                    <ToastContainer
+                        position="bottom-right"
+                        autoClose={5000}
+                        hideProgressBar={false}
+                        newestOnTop={false}
+                        closeOnClick
+                        rtl={false}
+                        pauseOnFocusLoss
+                        draggable
+                        pauseOnHover
+                        theme="dark"
+                    />
+                </QueryClientProvider>
+            </WagmiProvider>
         );
     },
     progress: {

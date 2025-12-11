@@ -77,6 +77,14 @@ class User extends Authenticatable implements MustVerifyEmail
     }
 
     /**
+     * Get the user's virtual accounts.
+     */
+    public function virtualAccounts()
+    {
+        return $this->hasMany(VirtualAccount::class);
+    }
+
+    /**
      * Send the email verification notification.
      */
     public function sendEmailVerificationNotification(): void

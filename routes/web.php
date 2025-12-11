@@ -3,10 +3,14 @@
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use App\Http\Controllers\WalletController;
+use App\Http\Controllers\Webhook\PaystackWebhookController;
 
 Route::get('/', function () {
     return Inertia::render('welcome');
 })->name('home');
+
+// Paystack webhook - must be accessible publicly
+Route::post('/webhook/paystack', [PaystackWebhookController::class, 'handle'])->name('webhook.paystack');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', function () {
@@ -47,3 +51,4 @@ Route::get('/auth/{provider}', [SocialAuthController::class, 'redirect'])
 Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'callback'])
     ->where('provider', 'google|x')
     ->name('social.callback');
+Route::get('/api/virtual-account', [WalletController::class, 'getVirtualAccount'])->name('virtual-account');

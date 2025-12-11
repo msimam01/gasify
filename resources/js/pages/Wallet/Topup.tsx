@@ -3,21 +3,19 @@ import { Head, useForm, Link } from '@inertiajs/react';
 import AppLayout from '@/layouts/app-layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   IconCreditCard,
   IconBuildingBank,
-  IconDeviceMobile,
   IconArrowLeft,
   IconWallet,
   IconCopy,
-  IconCheck
+  IconCheck,
+  IconShield
 } from '@tabler/icons-react';
 import * as WalletController from '@/actions/App/Http/Controllers/WalletController';
-import {QRCodeSVG} from 'qrcode.react';
+import { QRCodeSVG } from 'qrcode.react';
 
 interface Wallet {
   id: number;
@@ -27,75 +25,57 @@ interface Wallet {
   logo?: string | null;
 }
 
+interface VirtualAccount {
+  account_name: string;
+  account_number: string;
+  bank_name: string;
+  provider: string;
+  reference: string;
+}
+
 export default function WalletTopup({ wallets }: { wallets: Wallet[] }) {
-  const [selectedMethod, setSelectedMethod] = useState('');
   const [selectedCryptoWallet, setSelectedCryptoWallet] = useState<Wallet | null>(wallets.length > 0 ? wallets[0] : null);
   const [copied, setCopied] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [virtualAccount, setVirtualAccount] = useState<VirtualAccount | null>(null);
+  const [loadingVirtualAccount, setLoadingVirtualAccount] = useState(false);
 
-  // Inertia form state
-  const { data, setData, post, processing, errors } = useForm({
-    amount: '',
-    currency: 'NGN',
-    payment_method: '',
-  });
-
-  // Payment methods
-  const paymentMethods = [
-    {
-      id: 'opay',
-      name: 'Opay',
-      icon: IconWallet,
-      description: 'Pay with your Opay wallet',
-      enabled: true,
-    },
-    {
-      id: 'paystack',
-      name: 'Paystack',
-      icon: IconCreditCard,
-      description: 'Pay with cards via Paystack',
-      enabled: true,
-    },
-    {
-      id: 'flutterwave',
-      name: 'Flutterwave',
-      icon: IconBuildingBank,
-      description: 'Pay with cards via Flutterwave',
-      enabled: true,
-    },
-    {
-      id: 'stripe',
-      name: 'Stripe',
-      icon: IconDeviceMobile,
-      description: 'Pay with cards via Stripe',
-      enabled: false,
-      comingSoon: true,
-    },
-  ];
-
-  // Quick amounts
-  const quickAmounts = [1000, 2000, 5000, 10000, 20000, 50000];
-
-  // Handle form submit
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    post(WalletController.processTopup.url());
-  };
-
-  // Handle quick amount select
-  const handleQuickAmount = (amount: number) => {
-    setData('amount', amount.toString());
-  };
-
-  const handleCopyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
+  // Fetch virtual account details
+  useEffect(() => {
+    setLoadingVirtualAccount(true);
+    fetch('/api/virtual-account')
+      .then(response => response.json())
+      .then(data => {
+        setVirtualAccount(data);
+        setLoadingVirtualAccount(false);
+      })
+      .catch(error => {
+        console.error('Error fetching virtual account:', error);
+        setLoadingVirtualAccount(false);
+      });
+  }, []);
 
   useEffect(() => {
     if (wallets.length > 0 && !selectedCryptoWallet) setSelectedCryptoWallet(wallets[0]);
   }, [wallets, selectedCryptoWallet]);
+
+  const handleCopyToClipboard = (text: string, field?: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      if (field) {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 2000);
+      }
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const copyAllDetails = () => {
+    if (virtualAccount) {
+      const details = `${virtualAccount.account_name}\n${virtualAccount.bank_name}\n${virtualAccount.account_number}`;
+      handleCopyToClipboard(details, 'all');
+    }
+  };
 
   return (
     <AppLayout breadcrumbs={[
@@ -131,174 +111,131 @@ export default function WalletTopup({ wallets }: { wallets: Wallet[] }) {
 
                   {/* Fiat Deposit Tab */}
                   <TabsContent value="fiat">
-                    <form onSubmit={handleSubmit} className="space-y-6 mt-4">
-                      {/* Amount Section */}
-                      <Card>
-                        <CardHeader>
-                          <CardTitle>Enter Amount</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="amount">Amount</Label>
-                            <div className="flex gap-2">
-                              {/* Currency Select */}
-                              <Select value={data.currency} onValueChange={(value) => setData('currency', value)}>
-                                <SelectTrigger className="w-24">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="NGN">NGN</SelectItem>
-                                  <SelectItem value="USD">USD</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              {/* Input field */}
-                              <Input
-                                id="amount"
-                                type="number"
-                                placeholder="0.00"
-                                value={data.amount}
-                                onChange={(e) => setData('amount', e.target.value)}
-                                className="flex-1"
-                                min="100"
-                                step="0.01"
-                              />
+                    <div className="space-y-6 mt-4">
+                      {loadingVirtualAccount ? (
+                        <Card>
+                          <CardContent className="pt-6">
+                            <div className="text-center py-8">
+                              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600 mx-auto mb-4"></div>
+                              <p className="text-sm text-muted-foreground">Loading your virtual account...</p>
                             </div>
-                            {errors.amount && <p className="text-sm text-red-600">{errors.amount}</p>}
-                          </div>
+                          </CardContent>
+                        </Card>
+                      ) : virtualAccount ? (
+                        <>
+                          <Alert className="border-emerald-200 bg-emerald-50">
+                            <IconShield className="h-4 w-4 text-emerald-600" />
+                            <AlertDescription className="text-emerald-800">
+                              <strong>Secure Transfer:</strong> Use your personal NGN account details below. Funds appear instantly after transfer!
+                            </AlertDescription>
+                          </Alert>
 
-                          {/* Quick Amounts */}
-                          <div>
-                            <Label className="text-sm text-muted-foreground">Quick amounts</Label>
-                            <div className="grid grid-cols-3 gap-2 mt-2">
-                              {quickAmounts.map((amount) => (
-                                <Button
-                                  key={amount}
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleQuickAmount(amount)}
-                                  className="text-xs"
-                                >
-                                  ₦{amount.toLocaleString()}
-                                </Button>
-                              ))}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Payment Method Section */}
-                      <Card>
-                        <CardHeader>
-                          <CardTitle>Select Payment Method</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-3">
-                            {paymentMethods.map((method) => {
-                              const Icon = method.icon;
-                              const isDisabled = !method.enabled;
-                              return (
-                                <div
-                                  key={method.id}
-                                  className={`p-4 rounded-lg border transition-colors relative ${
-                                    isDisabled
-                                      ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
-                                      : selectedMethod === method.id
-                                      ? 'border-primary bg-primary/5 cursor-pointer'
-                                      : 'border-border hover:border-primary/50 cursor-pointer'
-                                  }`}
-                                  onClick={() => {
-                                    if (!isDisabled) {
-                                      setSelectedMethod(method.id);
-                                      setData('payment_method', method.id);
-                                    }
-                                  }}
-                                >
-                                  <div className="flex items-center space-x-3">
-                                    <Icon className={`h-5 w-5 ${isDisabled ? 'text-gray-400' : ''}`} />
-                                    <div className="flex-1">
-                                      <div className={`font-medium flex items-center gap-2 ${isDisabled ? 'text-gray-500' : ''}`}>
-                                        {method.name}
-                                        {method.comingSoon && (
-                                          <span className="text-xs bg-orange-100 text-orange-600 px-2 py-1 rounded-full">
-                                            Coming Soon
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className={`text-sm ${isDisabled ? 'text-gray-400' : 'text-muted-foreground'}`}>
-                                        {method.description}
+                          <Card className="border-l-4 border-l-emerald-500 bg-gradient-to-br from-emerald-50 to-green-50">
+                            <CardHeader>
+                              <CardTitle className="flex items-center gap-2 text-emerald-700">
+                                <IconCreditCard className="h-5 w-5" />
+                                Your Personal NGN Account
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="space-y-6">
+                                <div className="bg-white p-6 rounded-lg border border-emerald-200 shadow-sm">
+                                  <div className="space-y-4">
+                                    <div>
+                                      <p className="text-xs text-muted-foreground mb-2 font-medium">Bank Name</p>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-lg font-semibold">{virtualAccount.bank_name}</span>
                                       </div>
                                     </div>
-                                    {!isDisabled && (
-                                      <div className={`w-4 h-4 rounded-full border-2 ${
-                                        selectedMethod === method.id
-                                          ? 'border-primary bg-primary'
-                                          : 'border-gray-300'
-                                      }`}>
-                                        {selectedMethod === method.id && (
-                                          <div className="w-full h-full rounded-full bg-white scale-50" />
-                                        )}
+                                    
+                                    <div>
+                                      <p className="text-xs text-muted-foreground mb-2 font-medium">Account Name</p>
+                                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border">
+                                        <span className="text-lg font-semibold">{virtualAccount.account_name}</span>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0"
+                                          onClick={() => handleCopyToClipboard(virtualAccount.account_name, 'name')}
+                                        >
+                                          {copiedField === 'name' ? (
+                                            <IconCheck className="h-4 w-4 text-green-600" />
+                                          ) : (
+                                            <IconCopy className="h-4 w-4" />
+                                          )}
+                                        </Button>
                                       </div>
-                                    )}
+                                    </div>
+                                    
+                                    <div>
+                                      <p className="text-xs text-muted-foreground mb-2 font-medium">Account Number</p>
+                                      <div className="flex items-center justify-between p-4 bg-emerald-50 rounded-lg border-2 border-emerald-200">
+                                        <span className="text-2xl font-bold tracking-widest font-mono">
+                                          {virtualAccount.account_number}
+                                        </span>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0"
+                                          onClick={() => handleCopyToClipboard(virtualAccount.account_number, 'number')}
+                                        >
+                                          {copiedField === 'number' ? (
+                                            <IconCheck className="h-4 w-4 text-green-600" />
+                                          ) : (
+                                            <IconCopy className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
-                              );
-                            })}
-                          </div>
-                          {errors.payment_method && <p className="text-sm text-red-600 mt-2">{errors.payment_method}</p>}
-                        </CardContent>
-                      </Card>
 
-                      {/* Transaction Summary */}
-                      {data.amount && selectedMethod && (
+                                <Alert className="border-emerald-200 bg-emerald-100">
+                                  <IconBuildingBank className="h-4 w-4 text-emerald-600" />
+                                  <AlertDescription className="text-emerald-800">
+                                    <strong>How it works:</strong>
+                                    <ul className="mt-2 space-y-1 text-sm">
+                                      <li>• Transfer any amount from any Nigerian bank to this account</li>
+                                      <li>• Funds appear instantly in your wallet</li>
+                                      <li>• No minimum or maximum limits</li>
+                                      <li>• Completely secure and CBN-compliant</li>
+                                    </ul>
+                                  </AlertDescription>
+                                </Alert>
+
+                                <Button 
+                                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-6 shadow-lg shadow-emerald-600/20"
+                                  onClick={copyAllDetails}
+                                  disabled={copiedField === 'all'}
+                                >
+                                  {copiedField === 'all' ? (
+                                    <>
+                                      <IconCheck className="mr-2 h-5 w-5" />
+                                      Copied Successfully!
+                                    </>
+                                  ) : (
+                                    <>
+                                      <IconCopy className="mr-2 h-5 w-5" />
+                                      Copy All Account Details
+                                    </>
+                                  )}
+                                </Button>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </>
+                      ) : (
                         <Card>
-                          <CardHeader>
-                            <CardTitle>Transaction Summary</CardTitle>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="space-y-2 text-sm">
-                              <div className="flex justify-between">
-                                <span>Amount:</span>
-                                <span className="font-medium">
-                                  {data.currency} {parseFloat(data.amount || '0').toLocaleString()}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Payment Method:</span>
-                                <span className="font-medium">
-                                  {paymentMethods.find(m => m.id === selectedMethod && m.enabled)?.name}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Processing Fee:</span>
-                                <span className="font-medium">Free</span>
-                              </div>
-                              <hr className="my-2" />
-                              <div className="flex justify-between font-medium">
-                                <span>Total:</span>
-                                <span>
-                                  {data.currency} {parseFloat(data.amount || '0').toLocaleString()}
-                                </span>
-                              </div>
+                          <CardContent className="pt-6">
+                            <div className="text-center py-8">
+                              <IconBuildingBank className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                              <p className="text-sm text-muted-foreground">Unable to load virtual account details</p>
+                              <p className="text-xs text-muted-foreground mt-1">Please refresh the page or contact support</p>
                             </div>
                           </CardContent>
                         </Card>
                       )}
-
-                      {/* Submit Button */}
-                      <Button
-                        type="submit"
-                        className="w-full"
-                        disabled={
-                          processing ||
-                          !data.amount ||
-                          !selectedMethod ||
-                          !paymentMethods.find(m => m.id === selectedMethod)?.enabled
-                        }
-                      >
-                        {processing ? 'Processing...' : 'Proceed to Payment'}
-                      </Button>
-                    </form>
+                    </div>
                   </TabsContent>
 
                   {/* Crypto Deposit Tab */}
@@ -310,24 +247,31 @@ export default function WalletTopup({ wallets }: { wallets: Wallet[] }) {
                         </CardHeader>
                         <CardContent>
                           {wallets.length > 0 ? (
-                            <Select
-                              onValueChange={(value) => setSelectedCryptoWallet(wallets.find(w => w.id.toString() === value) || null)}
-                              defaultValue={selectedCryptoWallet?.id.toString()}
-                            >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select a wallet to deposit to" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {wallets.map(wallet => (
-                                  <SelectItem key={wallet.id} value={wallet.id.toString()}>
-                                    <div className="flex items-center gap-2">
-                                      {wallet.logo && <img src={wallet.logo} alt={wallet.chain} className="w-5 h-5 rounded-full" />}
-                                      <span>{wallet.chain} ({wallet.symbol})</span>
+                            <div className="space-y-4">
+                              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                                {wallets.map((wallet) => (
+                                  <div
+                                    key={wallet.id}
+                                    className={`p-4 rounded-lg border cursor-pointer transition-colors ${
+                                      selectedCryptoWallet?.id === wallet.id
+                                        ? 'border-emerald-500 bg-emerald-50'
+                                        : 'border-gray-200 hover:border-gray-300'
+                                    }`}
+                                    onClick={() => setSelectedCryptoWallet(wallet)}
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      {wallet.logo && (
+                                        <img src={wallet.logo} alt={wallet.chain} className="w-8 h-8 rounded-full" />
+                                      )}
+                                      <div>
+                                        <p className="font-medium">{wallet.chain}</p>
+                                        <p className="text-sm text-muted-foreground">{wallet.symbol}</p>
+                                      </div>
                                     </div>
-                                  </SelectItem>
+                                  </div>
                                 ))}
-                              </SelectContent>
-                            </Select>
+                              </div>
+                            </div>
                           ) : (
                             <p className="text-sm text-muted-foreground">You have no crypto wallets. Please create one first.</p>
                           )}
@@ -337,21 +281,41 @@ export default function WalletTopup({ wallets }: { wallets: Wallet[] }) {
                       {selectedCryptoWallet && (
                         <Card>
                           <CardHeader>
-                            <CardTitle>Deposit {selectedCryptoWallet.symbol}</CardTitle>
+                            <CardTitle className="flex items-center gap-2">
+                              <IconWallet className="h-5 w-5" />
+                              Deposit {selectedCryptoWallet.symbol}
+                            </CardTitle>
                           </CardHeader>
-                          <CardContent className="flex flex-col items-center gap-4">
-                            <div className="p-2 bg-white rounded-lg border">
-                              <QRCodeSVG value={selectedCryptoWallet.address} size={160} />
+                          <CardContent className="flex flex-col items-center gap-6">
+                            <div className="p-4 bg-white rounded-lg border shadow-sm">
+                              <QRCodeSVG value={selectedCryptoWallet.address} size={180} />
                             </div>
-                            <div className="text-center">
-                              <p className="text-sm text-muted-foreground">Send only <span className="font-bold">{selectedCryptoWallet.symbol}</span> to this address.</p>
-                              <p className="text-sm text-red-500">Sending any other coins may result in permanent loss.</p>
+                            <div className="text-center space-y-2">
+                              <p className="text-sm text-muted-foreground">
+                                Send only <span className="font-bold text-emerald-600">{selectedCryptoWallet.symbol}</span> to this address
+                              </p>
+                              <p className="text-xs text-red-500 font-medium">
+                                ⚠️ Sending any other coins may result in permanent loss
+                              </p>
                             </div>
-                            <div className="w-full p-3 bg-muted rounded-lg flex items-center justify-between gap-2">
-                              <span className="font-mono text-sm truncate">{selectedCryptoWallet.address}</span>
-                              <Button variant="ghost" size="sm" onClick={() => handleCopyToClipboard(selectedCryptoWallet.address)}>
-                                {copied ? <IconCheck className="h-4 w-4 text-green-500" /> : <IconCopy className="h-4 w-4" />}
+                            <div className="w-full p-4 bg-gray-50 rounded-lg border flex items-center justify-between gap-3">
+                              <span className="font-mono text-sm break-all flex-1">{selectedCryptoWallet.address}</span>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleCopyToClipboard(selectedCryptoWallet.address)}
+                                className="shrink-0"
+                              >
+                                {copied ? (
+                                  <IconCheck className="h-4 w-4 text-green-500" />
+                                ) : (
+                                  <IconCopy className="h-4 w-4" />
+                                )}
                               </Button>
+                            </div>
+                            <div className="text-center text-xs text-muted-foreground">
+                              <p>Network: {selectedCryptoWallet.chain}</p>
+                              <p>Minimum: 0.001 {selectedCryptoWallet.symbol}</p>
                             </div>
                           </CardContent>
                         </Card>

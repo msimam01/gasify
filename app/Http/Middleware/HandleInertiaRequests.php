@@ -45,6 +45,7 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            'csrf_token' => $request->session()->token(),
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
             'ziggy' => function () use ($request) {
                 return array_merge((new \Tighten\Ziggy\Ziggy)->toArray(), [

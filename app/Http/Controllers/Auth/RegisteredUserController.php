@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Modules\Auth\DTOs\RegisterDto;
 use App\Modules\Auth\Services\AuthService;
 use App\Services\WalletService;
+use App\Services\VirtualAccountService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -16,7 +17,8 @@ class RegisteredUserController extends Controller
 {
     public function __construct(
         protected AuthService $authService,
-        protected WalletService $walletService
+        protected WalletService $walletService,
+        protected VirtualAccountService $virtualAccountService
     ) {}
 
     /**
@@ -40,6 +42,9 @@ class RegisteredUserController extends Controller
 
         // 🔑 initialize wallets
         $this->walletService->initializeUserWallets($user);
+
+        // 💰 create virtual account for user
+        $this->virtualAccountService->createForUser($user);
 
         // Login the user
         Auth::login($user);

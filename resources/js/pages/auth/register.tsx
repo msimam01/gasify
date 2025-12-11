@@ -63,6 +63,10 @@ export default function Register() {
     const [touched, setTouched] = useState<TouchedFields>({})
 
     const { data, setData, post, processing, errors } = useForm({
+        headers: {
+            "X-CSRF-TOKEN": window?.Inertia?.page?.props?.csrf_token || "",
+        },
+    }, {
         name: '',
         email: '',
         password: '',
